@@ -9,7 +9,10 @@ import "./style.css";
 
 import { diffWords } from "diff";
 import { api, ApiError, type Version } from "./api";
+import { closeMenu, openContextMenu } from "./contextmenu";
 import { DocEditor, type ViewMode } from "./editor";
+import { SpellService } from "./spell";
+import { analyze, LIX_SCALE, lixLevel, type TextStats } from "./stats";
 import {
   applySettings,
   FONTS,
@@ -20,7 +23,7 @@ import {
   type Settings,
   type Theme,
 } from "./settings";
-import { confirm, countWords, formatDate, h, isMod, modKey, prompt, showModal, toast } from "./ui";
+import { confirm, formatDate, h, isMod, modKey, prompt, showModal, toast } from "./ui";
 
 const AUTOSAVE_MS = 1500;
 const LAST_DOC_KEY = "ww.lastDoc";
@@ -49,20 +52,37 @@ class App {
   private viewBtns: Record<ViewMode, HTMLButtonElement>;
   private statusWords = h("span");
   private statusChars = h("span");
+  private statusLix = h("button", { class: "status-lix", title: "Läsbarhet – öppna analys" });
   private statusSave = h("span", { class: "save-state" });
   private docsDrawer = h("aside", { class: "drawer left", "aria-label": "Dokument" });
   private historyDrawer = h("aside", { class: "drawer right", "aria-label": "Versionshistorik" });
+  private analysisDrawer = h("aside", { class: "drawer right wide", "aria-label": "Textanalys" });
+  private spell = new SpellService();
+  private highlighted: string | null = null;
+  private includeStopwords = false;
+  private analysisTimer: number | undefined;
   private settingsPanel = h("div", { class: "popover", role: "dialog", "aria-label": "Utseende" });
   private banner = h("div", { class: "banner", role: "alert", hidden: true });
 
   constructor(root: HTMLElement) {
     applySettings(this.settings);
 
+    this.spell.enabled = this.settings.spellcheck;
     const host = h("div", { class: "editor-host" });
     this.editor = new DocEditor({
       host,
+      spell: this.spell,
       onChange: (md) => this.onChange(md),
-      onActivity: () => document.body.classList.add("typing"),
+      onActivity: () => {
+        document.body.classList.add("typing");
+        closeMenu();
+      },
+      onSelection: () => this.scheduleAnalysis(),
+      onContextMenu: (event, view) =>
+        openContextMenu(event, view, {
+          spell: this.spell,
+          replace: (from, to, text) => this.editor.replaceRange(from, to, text),
+        }),
     });
     this.editor.typewriter = this.settings.typewriter;
 
@@ -97,18 +117,21 @@ class App {
         "div",
         { class: "group" },
         h("div", { class: "segmented", role: "group", "aria-label": "Vy" }, ...Object.values(this.viewBtns)),
+        h("button", { onclick: () => this.toggleDrawer(this.analysisDrawer) }, "Analys"),
         h("button", { onclick: () => this.toggleDrawer(this.historyDrawer) }, "Historik"),
         h("button", { onclick: (e: Event) => this.toggleSettings(e) }, "Utseende"),
         h("button", { onclick: () => this.toggleFullscreen(), title: "Helskärm" }, "Helskärm"),
       ),
     );
     this.titleBtn.addEventListener("click", () => this.renameCurrent());
+    this.statusLix.addEventListener("click", () => this.toggleDrawer(this.analysisDrawer));
 
     const statusbar = h(
       "footer",
       { class: "chrome statusbar" },
       this.statusWords,
       this.statusChars,
+      this.statusLix,
       this.statusSave,
     );
 
@@ -119,6 +142,7 @@ class App {
       statusbar,
       this.docsDrawer,
       this.historyDrawer,
+      this.analysisDrawer,
       this.settingsPanel,
     );
 
@@ -317,11 +341,14 @@ class App {
     document.title = name ? `${name} – Word Work` : "Word Work";
   }
 
-  private updateStats(md: string): void {
-    const plain = stripMarkdown(md);
-    const words = countWords(plain);
-    this.statusWords.textContent = `${words.toLocaleString("sv-SE")} ord`;
-    this.statusChars.textContent = `${plain.replace(/\n/g, "").length.toLocaleString("sv-SE")} tecken`;
+  private updateStats(_md?: string): void {
+    const stats = analyze(this.editor.getPlainText(), { top: 0 });
+    this.statusWords.textContent = `${stats.words.toLocaleString("sv-SE")} ord`;
+    this.statusChars.textContent = `${stats.chars.toLocaleString("sv-SE")} tecken`;
+    this.statusLix.textContent = stats.lix === null ? "LIX –" : `LIX ${Math.round(stats.lix)}`;
+    this.statusLix.title =
+      stats.lix === null ? "Läsbarhet" : `Läsbarhet: ${lixLevel(stats.lix).label.toLowerCase()} – öppna analys`;
+    this.scheduleAnalysis();
   }
 
   // ---------------- lådor & paneler ----------------
@@ -330,7 +357,9 @@ class App {
     this.closeDrawers();
     if (open) {
       drawer.classList.add("open");
+      document.body.dataset.drawer = drawer.classList.contains("left") ? "left" : "right";
       if (drawer === this.docsDrawer) void this.renderDocs();
+      else if (drawer === this.analysisDrawer) this.renderAnalysis();
       else void this.renderHistory();
     } else {
       this.editor.focus();
@@ -338,9 +367,14 @@ class App {
   }
 
   private closeDrawers(): void {
+    delete document.body.dataset.drawer;
     this.docsDrawer.classList.remove("open");
     this.historyDrawer.classList.remove("open");
     this.settingsPanel.classList.remove("open");
+    if (this.analysisDrawer.classList.contains("open")) {
+      this.analysisDrawer.classList.remove("open");
+      this.setHighlight(null);
+    }
   }
 
   private async renderDocs(): Promise<void> {
@@ -386,6 +420,7 @@ class App {
       h(
         "div",
         { class: "drawer-head" },
+        this.closeButton(),
         h("h2", {}, "Dokument"),
         h("button", { onclick: () => this.newDocument() }, "Nytt"),
       ),
@@ -426,6 +461,7 @@ class App {
       h(
         "div",
         { class: "drawer-head" },
+        this.closeButton(),
         h("h2", {}, "Historik"),
         h(
           "button",
@@ -518,6 +554,229 @@ class App {
     });
   }
 
+  // ---------------- analys ----------------
+  private scheduleAnalysis(): void {
+    if (!this.analysisDrawer.classList.contains("open")) return;
+    window.clearTimeout(this.analysisTimer);
+    this.analysisTimer = window.setTimeout(() => this.renderAnalysis(), 300);
+  }
+
+  private setHighlight(word: string | null): void {
+    this.highlighted = word;
+    if (word && this.editor.mode !== "write") this.setView("write", false);
+    this.editor.highlight(word);
+  }
+
+  private renderAnalysis(): void {
+    // En markering räknas först när den är minst några ord (inte bara ett markerat ord).
+    const sel = this.editor.getSelectionText();
+    const selection = (sel.match(/\S+/g)?.length ?? 0) >= 3 ? sel : "";
+    const text = selection || this.editor.getPlainText();
+    const st: TextStats = analyze(text, { includeStopwords: this.includeStopwords, top: 40 });
+    const nf = (n: number, d = 0) =>
+      n.toLocaleString("sv-SE", { minimumFractionDigits: d, maximumFractionDigits: d });
+
+    const row = (label: string, value: string, hint = "") =>
+      h("div", { class: "stat", title: hint }, h("span", {}, label), h("strong", {}, value));
+
+    // LIX-mätare
+    let lixBlock: HTMLElement;
+    if (st.lix === null) {
+      lixBlock = h("p", { class: "meta" }, "Skriv några meningar så räknas LIX ut.");
+    } else {
+      const level = lixLevel(st.lix);
+      const pct = Math.min(100, Math.max(0, ((st.lix - 15) / (70 - 15)) * 100));
+      lixBlock = h(
+        "div",
+        { class: "lix" },
+        h(
+          "div",
+          { class: "lix-head" },
+          h("span", { class: "lix-value" }, nf(st.lix)),
+          h("span", {}, h("strong", {}, level.label), h("br", {}), h("span", { class: "meta" }, level.example)),
+        ),
+        h(
+          "div",
+          { class: "lix-scale", role: "img", "aria-label": `LIX ${nf(st.lix)} – ${level.label}` },
+          ...LIX_SCALE.map((l) => h("span", { class: l === level ? "on" : "" })),
+          h("i", { style: `left:${pct}%` }),
+        ),
+        h(
+          "div",
+          { class: "lix-labels" },
+          ...["25", "30", "40", "50", "60"].map((t) => h("span", {}, t)),
+        ),
+      );
+    }
+
+    const freqList = h("ol", { class: "freq" });
+    const maxCount = st.frequency[0]?.count ?? 1;
+    for (const f of st.frequency) {
+      const active = this.highlighted === f.word;
+      freqList.append(
+        h(
+          "li",
+          {},
+          h(
+            "button",
+            {
+              class: active ? "active" : "",
+              title: active ? "Ta bort markering" : "Markera i texten",
+              onclick: () => {
+                this.setHighlight(active ? null : f.word);
+                this.renderAnalysis();
+              },
+            },
+            h("span", { class: "bar", style: `width:${(f.count / maxCount) * 100}%` }),
+            h("span", { class: "w" }, f.word),
+            h("span", { class: "c" }, String(f.count)),
+          ),
+        ),
+      );
+    }
+
+    const sentenceList = h("ol", { class: "sentences" });
+    for (const s of st.longestSentences) {
+      sentenceList.append(
+        h(
+          "li",
+          {},
+          h(
+            "button",
+            {
+              title: "Visa i texten",
+              onclick: () => {
+                if (this.editor.mode !== "write") this.setView("write", false);
+                this.editor.selectText(s.text);
+              },
+            },
+            h("span", { class: "c" }, `${s.words} ord`),
+            h("span", { class: "t" }, s.text.length > 140 ? `${s.text.slice(0, 140)} …` : s.text),
+          ),
+        ),
+      );
+    }
+
+    const stopToggle = h(
+      "label",
+      { class: "check small" },
+      h("input", {
+        type: "checkbox",
+        checked: this.includeStopwords,
+        onchange: (e: Event) => {
+          this.includeStopwords = (e.target as HTMLInputElement).checked;
+          this.renderAnalysis();
+        },
+      }),
+      h("span", {}, "Visa småord"),
+    );
+
+    const scrollTop = this.analysisDrawer.scrollTop;
+    this.analysisDrawer.replaceChildren(
+      h(
+        "div",
+        { class: "drawer-head" },
+        this.closeButton(),
+        h("h2", {}, "Analys"),
+        h("span", { class: "meta scope" }, selection ? "Markerad text" : "Hela texten"),
+      ),
+      h("section", {}, h("h3", {}, "Läsbarhet (LIX)"), lixBlock),
+      h(
+        "section",
+        { class: "grid" },
+        row("Ord", nf(st.words)),
+        row("Unika ord", nf(st.uniqueWords)),
+        row("Meningar", nf(st.sentences)),
+        row("Stycken", nf(st.paragraphs)),
+        row("Tecken", nf(st.chars)),
+        row("Utan blanksteg", nf(st.charsNoSpaces)),
+        row("Ord per mening", nf(st.avgSentenceLength, 1)),
+        row("Bokstäver per ord", nf(st.avgWordLength, 1)),
+        row("Långa ord", st.words ? `${nf((st.longWords / st.words) * 100)} %` : "–", "Ord med fler än sex bokstäver"),
+        row(
+          "OVIX",
+          st.ovix === null ? "–" : nf(st.ovix, 0),
+          "Ordvariationsindex – högre värde betyder mer varierat ordförråd",
+        ),
+        row("Lästid", st.readingMinutes < 1 ? "< 1 min" : `${nf(Math.round(st.readingMinutes))} min`),
+      ),
+      h(
+        "section",
+        {},
+        h("div", { class: "section-head" }, h("h3", {}, "Vanligaste orden"), stopToggle),
+        st.frequency.length ? freqList : h("p", { class: "meta" }, "Inga ord ännu."),
+        h("p", { class: "meta" }, "Klicka på ett ord för att markera alla förekomster i texten."),
+      ),
+      h(
+        "section",
+        {},
+        h("h3", {}, "Längsta meningarna"),
+        st.longestSentences.length ? sentenceList : h("p", { class: "meta" }, "Inga meningar ännu."),
+      ),
+    );
+    this.analysisDrawer.scrollTop = scrollTop;
+  }
+
+  private closeButton(): HTMLElement {
+    return h(
+      "button",
+      {
+        class: "icon close",
+        title: "Stäng (Esc)",
+        "aria-label": "Stäng",
+        onclick: () => {
+          this.closeDrawers();
+          this.editor.focus();
+        },
+      },
+      "×",
+    );
+  }
+
+  private async showDictionary(): Promise<void> {
+    this.closeDrawers();
+    const { words } = await api.dictionary();
+    await showModal((close) => {
+      const list = h("ul", { class: "list dict" });
+      const render = (ws: string[]) => {
+        list.replaceChildren(
+          ...(ws.length
+            ? ws.map((w) =>
+                h(
+                  "li",
+                  {},
+                  h("span", { class: "item" }, w),
+                  h(
+                    "button",
+                    {
+                      class: "icon",
+                      title: `Ta bort ”${w}”`,
+                      "aria-label": `Ta bort ${w}`,
+                      onclick: async () => {
+                        const r = await api.dictionaryRemove(w);
+                        this.spell.forget(w);
+                        render(r.words);
+                      },
+                    },
+                    "×",
+                  ),
+                ),
+              )
+            : [h("li", { class: "empty" }, "Ordlistan är tom. Högerklicka på ett understruket ord för att lägga till det.")]),
+        );
+      };
+      render(words);
+      return h(
+        "div",
+        {},
+        h("h2", {}, "Egen ordlista"),
+        h("p", { class: "meta" }, "Ord här godkänns av stavningskontrollen. Listan sparas i datamappen (.wordwork/ordlista.txt)."),
+        list,
+        h("div", { class: "actions" }, h("button", { class: "primary", onclick: close }, "Klar")),
+      );
+    });
+  }
+
   private toggleSettings(e?: Event): void {
     e?.stopPropagation();
     const open = !this.settingsPanel.classList.contains("open");
@@ -534,6 +793,10 @@ class App {
       applySettings(s);
       saveSettings(s);
       this.editor.typewriter = s.typewriter;
+      if (this.spell.enabled !== s.spellcheck) {
+        this.spell.enabled = s.spellcheck;
+        this.spell.changed();
+      }
     };
     const select = <T extends string>(
       label: string,
@@ -599,6 +862,8 @@ class App {
       range("Textbredd", s.width, 40, 100, 2, (v) => `${v} tecken`, (v) => update({ width: v })),
       check("Dimma andra stycken än det jag skriver i", s.focusParagraph, (v) => update({ focusParagraph: v })),
       check("Skrivmaskinsläge (aktuell rad i mitten)", s.typewriter, (v) => update({ typewriter: v })),
+      check("Stavningskontroll", s.spellcheck, (v) => update({ spellcheck: v })),
+      h("button", { class: "link", onclick: () => this.showDictionary() }, "Egen ordlista …"),
     );
   }
 
@@ -662,15 +927,6 @@ class App {
       }
     });
   }
-}
-
-function stripMarkdown(md: string): string {
-  return md
-    .replace(/^#{1,6}\s+/gm, "")
-    .replace(/^\s*>\s?/gm, "")
-    .replace(/^\s*(?:[-*+]|\d+\.)\s+/gm, "")
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/[*_~`]/g, "");
 }
 
 function errorText(e: unknown): string {

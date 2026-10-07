@@ -14,6 +14,7 @@ class Settings:
     snapshot_minutes: float
     ollama_url: str
     ollama_model: str
+    resources_dir: Path = Path(__file__).resolve().parent.parent / "resources" / "sv"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -24,4 +25,10 @@ class Settings:
             snapshot_minutes=float(os.environ.get("WW_SNAPSHOT_MINUTES", "5")),
             ollama_url=os.environ.get("WW_OLLAMA_URL", "").rstrip("/"),
             ollama_model=os.environ.get("WW_OLLAMA_MODEL", ""),
+            resources_dir=Path(
+                os.environ.get(
+                    "WW_RESOURCES_DIR",
+                    Path(__file__).resolve().parent.parent / "resources" / "sv",
+                )
+            ).resolve(),
         )

@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from .config import Settings
+from .language import Language
 from .storage import Storage, StorageError
 
 
@@ -32,11 +33,21 @@ class NamedVersion(BaseModel):
     label: str = Field(default="", max_length=200)
 
 
+class CheckWords(BaseModel):
+    words: list[str] = Field(max_length=5000)
+
+
+class DictionaryWord(BaseModel):
+    word: str = Field(min_length=1, max_length=64)
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
     storage = Storage(settings.data_dir, settings.snapshot_minutes)
     app = FastAPI(title="Word Work", docs_url="/api/docs", openapi_url="/api/openapi.json")
     app.state.storage = storage
+    language = Language(settings.resources_dir, settings.data_dir / ".wordwork" / "ordlista.txt")
+    app.state.language = language
 
     @app.exception_handler(StorageError)
     async def storage_error(_: Request, exc: StorageError) -> JSONResponse:
@@ -44,7 +55,40 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/health")
     def health() -> dict:
-        return {"status": "ok", "ai": bool(settings.ollama_url)}
+        return {"status": "ok", "ai": bool(settings.ollama_url), "language": language.ready}
+
+    # ---------- språk ----------
+    def _clean_word(word: str) -> str:
+        word = word.strip()
+        if not word or any(c.isspace() for c in word) or len(word) > 64:
+            raise HTTPException(400, "Ogiltigt ord.")
+        return word
+
+    @app.post("/api/spell/check")
+    def spell_check(body: CheckWords) -> dict:
+        return {"misspelled": language.check(body.words)}
+
+    @app.get("/api/spell/suggest")
+    def spell_suggest(word: str = Query(max_length=64), limit: int = Query(6, ge=1, le=12)) -> dict:
+        return {"word": word, "suggestions": language.suggest(word, limit=limit)}
+
+    @app.get("/api/spell/dictionary")
+    def dictionary_list() -> dict:
+        return {"words": language.personal.words()}
+
+    @app.post("/api/spell/dictionary", status_code=201)
+    def dictionary_add(body: DictionaryWord) -> dict:
+        language.personal.add(_clean_word(body.word))
+        return {"words": language.personal.words()}
+
+    @app.delete("/api/spell/dictionary/{word}")
+    def dictionary_remove(word: str) -> dict:
+        language.personal.remove(word)
+        return {"words": language.personal.words()}
+
+    @app.get("/api/synonyms")
+    def synonyms(word: str = Query(max_length=64)) -> dict:
+        return {"word": word, "groups": language.synonyms(word)}
 
     # ---------- dokument ----------
     @app.get("/api/documents")

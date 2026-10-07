@@ -20,6 +20,12 @@ export interface Version {
   words: number;
 }
 
+export interface SynonymGroup {
+  word: string;
+  base_form: boolean;
+  synonyms: string[];
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -74,5 +80,22 @@ export const api = {
     request<{ modified: number; content: string }>(
       "POST",
       `${doc(name)}/history/${vid}/restore`,
+    ),
+  spellCheck: (words: string[]) =>
+    request<{ misspelled: string[] }>("POST", "/spell/check", { words }),
+  suggest: (word: string, limit = 6) =>
+    request<{ word: string; suggestions: string[] }>(
+      "GET",
+      `/spell/suggest?word=${encodeURIComponent(word)}&limit=${limit}`,
+    ),
+  dictionary: () => request<{ words: string[] }>("GET", "/spell/dictionary"),
+  dictionaryAdd: (word: string) =>
+    request<{ words: string[] }>("POST", "/spell/dictionary", { word }),
+  dictionaryRemove: (word: string) =>
+    request<{ words: string[] }>("DELETE", `/spell/dictionary/${encodeURIComponent(word)}`),
+  synonyms: (word: string) =>
+    request<{ word: string; groups: SynonymGroup[] }>(
+      "GET",
+      `/synonyms?word=${encodeURIComponent(word)}`,
     ),
 };

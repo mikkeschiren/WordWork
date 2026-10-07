@@ -22,9 +22,10 @@ COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
  && mkdir -p /data && chown 65532:65532 /data
 COPY backend/app /app/app
+COPY backend/resources /app/resources
 # Containern kör som nonroot (65532). Filrättigheter från värden (t.ex. 600)
 # följer med vid COPY, så normalisera dem här.
-RUN chmod -R a+rX,go-w /app/app /app/venv
+RUN chmod -R a+rX,go-w /app/app /app/resources /app/venv
 
 # ---------- 3. Körning (distroless, kör som nonroot) ----------
 FROM cgr.dev/chainguard/python:latest
@@ -36,6 +37,7 @@ ENV PATH="/app/venv/bin:$PATH" \
 COPY --from=backend --chown=65532:65532 /app/venv /app/venv
 COPY --from=backend --chown=65532:65532 /data /data
 COPY --from=backend /app/app /app/app
+COPY --from=backend /app/resources /app/resources
 COPY --from=frontend /build/dist /app/static
 VOLUME /data
 EXPOSE 8080

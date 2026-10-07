@@ -20,7 +20,8 @@ def client(tmp_path: Path) -> TestClient:
 
 
 def test_health(client):
-    assert client.get("/api/health").json() == {"status": "ok", "ai": False}
+    r = client.get("/api/health").json()
+    assert r["status"] == "ok" and r["ai"] is False
 
 
 def test_create_list_read_save(client, tmp_path):

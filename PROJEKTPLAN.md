@@ -14,7 +14,7 @@ Baserad på `PLAN.md`. Målet är en distraktionsfri ordbehandlare för kulturjo
 | Dokumentformat | Markdown internt | Enkelt, framtidssäkert, konverterbart till allt annat. |
 | Export/import | **Pandoc** (via `pypandoc_binary`, bundlad binär) | Markdown → DOCX, ODT, RTF, HTML och import från DOCX/ODT. Ingen PDF i v1. Bundlad binär gör oss oberoende av Wolfi-paket. |
 | Stavning | **Hunspell-format** + svensk ordlista (`sv_SE`, LibreOffice/DSSO) via `spylls` (ren Python) | Klarar svenska sammansättningar bättre än rena JS-alternativ; inga systempaket behövs. |
-| Synonymer | **Folkets synonymlexikon (Synlex, KTH)** – CC-BY | Fritt svenskt synonymlexikon; laddas in i SQLite vid build. |
+| Synonymer | **Synlex (Folkets synonymlexikon, KTH)** i LibreOffice/MyThes-format | Fritt svenskt synonymlexikon; ligger i repot och läses in i minnet vid start. |
 | AI | **Ollama** – lokal eller extern instans, via backend-proxy | Texten stannar hos användaren. Adress och modell väljs via miljövariabel. |
 | Lagring | Filer i monterad volym `/data` (Markdown) + ögonblicksbilder i `/data/.history/` | Användaren äger sina filer, enkel backup, versionshistorik. |
 | Användare | **Lokal enanvändarapp** | Ingen inloggning; containern binds till `127.0.0.1`. |
@@ -33,7 +33,7 @@ Baserad på `PLAN.md`. Målet är en distraktionsfri ordbehandlare för kulturjo
 │ FastAPI                                   │
 │  /spell  /synonyms  /stats  /export       │
 │  /documents  /history  /ai/chat           │
-│ Hunspell · Synlex(SQLite) · Pandoc        │
+│ Hunspell · Synlex · Pandoc                │
 └──────────────┬────────────────────────────┘
                │ volym /data      → Ollama (lokal/extern)
 ```
@@ -63,7 +63,7 @@ Baserad på `PLAN.md`. Målet är en distraktionsfri ordbehandlare för kulturjo
 - Personlig ordlista sparas i `/data` (viktigt för namn och facktermer i kulturjournalistik).
 
 ### Synonymer
-- Markera/dubbelklicka ett ord → panel med synonymer, grupperade efter styrka i Synlex.
+- Högerklicka på ett ord → meny med synonymer (även för grundformen om ordet är böjt).
 - Byte sker bara när användaren klickar.
 
 ### LIX och läsbarhet
@@ -99,7 +99,7 @@ Baserad på `PLAN.md`. Målet är en distraktionsfri ordbehandlare för kulturjo
 
 ### Fas 0 – Förstudie och skelett (≈ 1 vecka)
 - Endast Chainguards Python- och Node-images används; Pandoc och Hunspell-motor kommer som pip-paket, så inga Wolfi-systempaket behövs.
-- Licenskoll: svensk Hunspell-ordlista (LGPL), Synlex (CC-BY) – attribuering i appen.
+- Licenskoll: svensk Hunspell-ordlista (LGPL), Synlex (fri licens med krav på upphovsnotis) – se `backend/resources/sv/SOURCES.txt`.
 - Repo-struktur: `backend/`, `frontend/`, `Dockerfile`, `docker-compose.yml`, CI (GitHub Actions: lint, test, build image).
 - **Leverans:** `docker compose up` visar ”Hello Word Work” i webbläsaren.
 
@@ -113,7 +113,7 @@ Baserad på `PLAN.md`. Målet är en distraktionsfri ordbehandlare för kulturjo
 
 ### Fas 2 – Språkverktyg (≈ 2–3 veckor)
 - Stavningskontroll med egen ordlista.
-- Synonympanel (Synlex → SQLite vid image-build).
+- Synonymer i högerklicksmenyn (Synlex).
 - LIX/OVIX/nominalkvot och ordfrekvenspanel.
 - **Leverans:** Alla språkfunktioner utom AI.
 
@@ -175,4 +175,10 @@ Baserad på `PLAN.md`. Målet är en distraktionsfri ordbehandlare för kulturjo
 
 - **Fas 0 – klar (2026-10-07):** repo-struktur, Dockerfile (Chainguard node → python → distroless python), docker-compose. Docker-imagen är ännu inte provbyggd.
 - **Fas 1 – klar (2026-10-07):** dokument-API, autospar med konfliktskydd, papperskorg, versionshistorik (auto/manuell/namngiven, jämför, återställ), editor med Skriv/Markdown-växling, teman, typsnitt, fokus- och skrivmaskinsläge.
-- **Nästa:** fas 2 – stavning, synonymer, LIX och ordfrekvens.
+- **Fas 2 – klar (2026-10-07):**
+  - Stavningskontroll med spylls och DSSO-ordlistan i Skriv-vyn, med egen ordlista och ignorera.
+  - Synonymer från Synlex, inklusive grundform för böjda ord.
+  - Högerklicksmeny för förslag och synonymer.
+  - Analyspanel: LIX med skala, OVIX, statistik, ordfrekvens med markering i texten, längsta meningar och analys av markering. LIX visas i statusraden.
+- **Kvar från fas 2:** nominalkvot (kräver ordklasstaggning). Optimering för mycket långa manus: Markdown serialiseras i dag vid varje paus i skrivandet, vilket märks först kring 50 000+ ord.
+- **Nästa:** fas 3 – import och export med Pandoc (DOCX, ODT, RTF, HTML, TXT).

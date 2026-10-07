@@ -33,6 +33,16 @@ WW_DATA_PATH=~/Dokument/Texter docker compose up -d
   - En återställning sparar först den nuvarande texten, så inget går förlorat.
 - **Borttagna dokument** flyttas till `data/.trash/` och kan återskapas därifrån.
 - **Gränssnittet tonas bort** medan du skriver och kommer tillbaka när du rör musen.
+- **Stavningskontroll** (svensk Hunspell-ordlista) stryker under okända ord i Skriv-vyn.
+  - Högerklicka på ett ord för rättningsförslag, *Lägg till i egen ordlista* eller *Ignorera*.
+  - Den egna ordlistan sparas i `data/.wordwork/ordlista.txt` och kan redigeras under *Utseende → Egen ordlista*.
+  - I Markdown-vyn används webbläsarens egen stavningskontroll. Shift+högerklick ger webbläsarens vanliga meny.
+- **Synonymer:** högerklicka på valfritt ord. Är ordet böjt visas även synonymer till grundformen. Ordet byts bara om du klickar på en synonym.
+- **Analys** (knappen *Analys* eller LIX-värdet i statusraden):
+  - LIX med tolkningsskala enligt lix.se, OVIX, ord per mening, andel långa ord och lästid.
+  - De vanligaste orden. Klicka på ett ord för att markera alla förekomster i texten.
+  - De längsta meningarna. Klicka för att hoppa till en mening.
+  - Markerar du minst några ord gäller analysen bara markeringen.
 
 | Kortkommando | Gör |
 |---|---|
@@ -53,10 +63,17 @@ WW_DATA_PATH=~/Dokument/Texter docker compose up -d
 ## Utveckling
 
 ```sh
-make setup          # Python-venv + npm-paket
-make dev-backend    # API på :8080
-make dev-frontend   # Vite på :5173 (proxar /api)
-make test           # pytest + typkontroll/bygge av frontend
+# Backend – API på :8080
+cd backend
+python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+WW_DATA_DIR=../data .venv/bin/uvicorn app.main:create_app --factory --reload --port 8080
+.venv/bin/python -m pytest -q          # tester
+
+# Frontend – Vite på :5173 (proxar /api till :8080)
+cd frontend
+npm ci
+npm run dev
+npm run build                          # typkontroll + produktionsbygge
 ```
 
 - **Backend:** Python, FastAPI (`backend/app`)
@@ -73,6 +90,11 @@ data/
   .trash/                           ← borttagna dokument
 ```
 
-## Licenser för typsnitt
+## Licenser
 
-Typsnitten Literata, Source Sans 3 och IBM Plex Mono är licensierade under SIL Open Font License 1.1 och levereras via Fontsource.
+- **Typsnitt:** Literata, Source Sans 3 och IBM Plex Mono, SIL Open Font License 1.1, via Fontsource.
+- **Stavningsordlista:** "Den stora svenska ordlistan" av Göran Andersson, GNU LGPL 3.0.
+- **Synonymer:** Synlex (Folkets synonymlexikon) av Viggo Kann, KTH, i LibreOffice-konvertering.
+- **Stavningsmotor:** spylls (MPL 2.0).
+
+Se `backend/resources/sv/SOURCES.txt` för källor och licenstexter.

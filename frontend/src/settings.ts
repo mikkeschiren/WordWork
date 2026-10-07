@@ -11,6 +11,7 @@ export interface Settings {
   width: number; // ch
   focusParagraph: boolean;
   typewriter: boolean;
+  spellcheck: boolean;
 }
 
 export const FONTS: Record<Font, { label: string; stack: string }> = {
@@ -41,6 +42,7 @@ const DEFAULTS: Settings = {
   width: 66,
   focusParagraph: false,
   typewriter: false,
+  spellcheck: true,
 };
 
 const KEY = "ww.settings";

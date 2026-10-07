@@ -1,0 +1,60 @@
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.config import Settings
+from app.main import create_app
+
+
+@pytest.fixture
+def client(tmp_path: Path) -> TestClient:
+    settings = Settings(
+        data_dir=tmp_path, static_dir=None, snapshot_minutes=5, ollama_url="", ollama_model=""
+    )
+    return TestClient(create_app(settings))
+
+
+def test_check_swedish_text(client):
+    words = "Det här är en recenssion av teaterföreställningen på Dramaten 2026 i Göteborgs-Posten".split()
+    r = client.post("/api/spell/check", json={"words": words})
+    assert r.status_code == 200
+    assert r.json()["misspelled"] == ["recenssion"]
+
+
+def test_compounds_and_capitalisation(client):
+    words = ["kärnkraftverksolycka", "Kulturjournalisten", "Strindbergs", "TV"]
+    assert client.post("/api/spell/check", json={"words": words}).json()["misspelled"] == []
+
+
+def test_suggest(client):
+    r = client.get("/api/spell/suggest", params={"word": "recenssion"}).json()
+    assert "recension" in r["suggestions"]
+
+
+def test_personal_dictionary(client, tmp_path):
+    assert client.post("/api/spell/check", json={"words": ["Lagercrantzsk"]}).json()["misspelled"]
+    r = client.post("/api/spell/dictionary", json={"word": "Lagercrantzsk"})
+    assert r.status_code == 201 and r.json()["words"] == ["Lagercrantzsk"]
+    assert client.post("/api/spell/check", json={"words": ["Lagercrantzsk"]}).json()["misspelled"] == []
+    assert (tmp_path / ".wordwork" / "ordlista.txt").read_text() == "Lagercrantzsk\n"
+    # gemener i listan godkänner även versal begynnelsebokstav, inte tvärtom
+    client.post("/api/spell/dictionary", json={"word": "fanzinekultur"})
+    assert client.post("/api/spell/check", json={"words": ["Fanzinekultur", "lagercrantzsk"]}).json()[
+        "misspelled"
+    ] == ["lagercrantzsk"]
+    client.delete("/api/spell/dictionary/Lagercrantzsk")
+    assert client.get("/api/spell/dictionary").json()["words"] == ["fanzinekultur"]
+    assert client.post("/api/spell/dictionary", json={"word": "två ord"}).status_code == 400
+
+
+def test_synonyms_with_base_form(client):
+    groups = client.get("/api/synonyms", params={"word": "vackra"}).json()["groups"]
+    by_word = {g["word"]: g for g in groups}
+    assert by_word["vacker"]["base_form"] and "ljuvlig" in by_word["vacker"]["synonyms"]
+    assert not by_word["vackra"]["base_form"]  # böjda former kan ha egna synonymer
+
+    direct = client.get("/api/synonyms", params={"word": "Bra"}).json()["groups"]
+    assert direct[0]["word"] == "bra" and not direct[0]["base_form"]
+
+    assert client.get("/api/synonyms", params={"word": "xyzzy"}).json()["groups"] == []

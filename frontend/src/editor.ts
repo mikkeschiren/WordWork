@@ -15,7 +15,9 @@ import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "@tiptap/markdown";
 import { Placeholder } from "@tiptap/extensions";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
-import { Decoration, DecorationSet } from "@tiptap/pm/view";
+import { Decoration, DecorationSet, type EditorView } from "@tiptap/pm/view";
+import { TextSelection } from "@tiptap/pm/state";
+import { setHighlight, spellExtension, WordHighlight, type SpellService } from "./spell";
 
 export type ViewMode = "write" | "markdown";
 
@@ -44,8 +46,11 @@ const CurrentBlock = Extension.create({
 
 export interface EditorOptions {
   host: HTMLElement;
+  spell: SpellService;
   onChange: (markdown: string) => void;
   onActivity: () => void;
+  onSelection?: () => void;
+  onContextMenu?: (event: MouseEvent, view: EditorView) => boolean;
 }
 
 export class DocEditor {
@@ -108,6 +113,69 @@ export class DocEditor {
     else this.sourceEl.focus();
   }
 
+  /** Löptext utan Markdown-syntax (stycken åtskilda av tomrad). */
+  getPlainText(): string {
+    if (this.editor) return this.editor.getText({ blockSeparator: "\n\n" });
+    return stripMarkdown(this.markdown);
+  }
+
+  /** Markerad text i Skriv-vyn (tom sträng om inget är markerat). */
+  getSelectionText(): string {
+    if (!this.editor) return "";
+    const { from, to, empty } = this.editor.state.selection;
+    return empty ? "" : this.editor.state.doc.textBetween(from, to, "\n\n", " ");
+  }
+
+  /** Markerar alla förekomster av ett ord och scrollar till den första. */
+  highlight(word: string | null): void {
+    if (!this.editor) return;
+    const first = setHighlight(this.editor.view, word);
+    if (first !== null) this.scrollToPos(first);
+  }
+
+  /** Letar upp en textbit (t.ex. en mening) och markerar den. */
+  selectText(text: string): boolean {
+    if (!this.editor) return false;
+    const needle = text.slice(0, 80);
+    const { doc } = this.editor.state;
+    let found: { from: number; to: number } | null = null;
+    doc.descendants((node, pos) => {
+      if (found || !node.isTextblock) return !found;
+      const blockText = node.textBetween(0, node.content.size, " ", " ");
+      const idx = blockText.indexOf(needle);
+      if (idx >= 0) {
+        const from = pos + 1 + idx;
+        found = { from, to: Math.min(from + text.length, pos + 1 + node.content.size) };
+      }
+      return false;
+    });
+    if (!found) return false;
+    const { from, to } = found;
+    const view = this.editor.view;
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, from, to)));
+    view.focus();
+    this.scrollToPos(from);
+    return true;
+  }
+
+  private scrollToPos(pos: number): void {
+    if (!this.editor) return;
+    try {
+      const coords = this.editor.view.coordsAtPos(pos);
+      window.scrollBy({ top: coords.top - window.innerHeight * 0.4, behavior: "smooth" });
+    } catch {
+      /* ignorera */
+    }
+  }
+
+  /** Byter ut text i ett intervall (används av rättningar och synonymer). */
+  replaceRange(from: number, to: number, text: string): void {
+    if (!this.editor) return;
+    const view = this.editor.view;
+    view.dispatch(view.state.tr.insertText(text, from, to));
+    view.focus();
+  }
+
   private render(): void {
     this.host.dataset.mode = this.mode;
     if (this.mode === "write") {
@@ -137,19 +205,34 @@ export class DocEditor {
         Markdown.configure({ indentation: { style: "space", size: 2 } }),
         Placeholder.configure({ placeholder: "Skriv här …" }),
         CurrentBlock,
+        spellExtension(this.opts.spell),
+        WordHighlight,
       ],
       content: this.markdown,
       contentType: "markdown",
       editorProps: {
-        // Webbläsarens stavningskontroll används tills egen finns (fas 2).
-        attributes: { class: "prose", "aria-label": "Text", spellcheck: "true", lang: "sv" },
+        // Egen stavningskontroll i Skriv-vyn; webbläsarens används i Markdown-vyn.
+        attributes: { class: "prose", "aria-label": "Text", spellcheck: "false", lang: "sv" },
+        handleDOMEvents: {
+          contextmenu: (view, event) => {
+            if (event.shiftKey || !this.opts.onContextMenu) return false;
+            if (this.opts.onContextMenu(event, view)) {
+              event.preventDefault();
+              return true;
+            }
+            return false;
+          },
+        },
       },
       onUpdate: () => {
         this.wysiwygDirty = true;
         this.opts.onActivity();
         this.emitChange();
       },
-      onSelectionUpdate: () => this.typewriterScroll(),
+      onSelectionUpdate: () => {
+        this.typewriterScroll();
+        this.opts.onSelection?.();
+      },
     });
   }
 
@@ -186,4 +269,13 @@ function normalize(md: string): string {
   // Tomma rader i slutet av ett citat ("> " utan text) är bara skräp från Enter.
   const trimmed = md.replace(/\s+$/, "").replace(/(?:\n>[ \t]*)+$/, "").replace(/\s+$/, "");
   return trimmed ? `${trimmed}\n` : "";
+}
+
+export function stripMarkdown(md: string): string {
+  return md
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/^\s*>\s?/gm, "")
+    .replace(/^\s*(?:[-*+]|\d+\.)\s+/gm, "")
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/[*_~`]/g, "");
 }
