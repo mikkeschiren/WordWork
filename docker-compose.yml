@@ -1,0 +1,16 @@
+services:
+  word-work:
+    build: .
+    image: word-work:dev
+    container_name: word-work
+    ports:
+      - "127.0.0.1:8080:8080" # bara åtkomlig från den egna datorn
+    volumes:
+      - ${WW_DATA_PATH:-./data}:/data
+    environment:
+      WW_SNAPSHOT_MINUTES: ${WW_SNAPSHOT_MINUTES:-5}
+      WW_OLLAMA_URL: ${WW_OLLAMA_URL:-http://host.docker.internal:11434}
+      WW_OLLAMA_MODEL: ${WW_OLLAMA_MODEL:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
