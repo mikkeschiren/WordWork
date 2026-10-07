@@ -30,8 +30,13 @@ import {
   type Theme,
 } from "./settings";
 import { confirm, formatDate, h, isMod, modKey, prompt, showModal, toast } from "./ui";
+import { SearchBar } from "./searchbar";
+import { copyRich, publishContent } from "./publish";
+import { dropLocal, keepLocal, localCopy, type Unsaved } from "./unsaved";
 
 const AUTOSAVE_MS = 1500;
+const RETRY_MS = 5000;
+const PUBLISH_TITLE_KEY = "ww.publishTitle";
 const LAST_DOC_KEY = "ww.lastDoc";
 const VIEW_KEY = "ww.view";
 
@@ -52,6 +57,9 @@ class App {
   private saveState: SaveState = "saved";
   private saveTimer: number | undefined;
   private savePromise: Promise<void> | null = null;
+  private retryTimer: number | undefined;
+  private saveErrorShown = false;
+  private searchBar: SearchBar;
 
   // DOM
   private titleBtn = h("button", { class: "doc-title", title: "Byt namn" });
@@ -118,6 +126,7 @@ class App {
         }),
     });
     this.editor.typewriter = this.settings.typewriter;
+    this.searchBar = new SearchBar(this.editor, () => this.editor.focus());
     this.ai = new AIPanel({
       drawer: this.aiDrawer,
       closeButton: () => this.closeButton(),
@@ -168,7 +177,8 @@ class App {
         { class: "group" },
         this.panelButton(this.docsDrawer, "Dokument", `Dokument (${modKey}+O)`),
         h("button", { onclick: () => this.newDocument(), title: "Nytt dokument" }, "Nytt"),
-        h("button", { onclick: () => this.showExport(), title: `Exportera (${modKey}+E)` }, "Exportera"),
+        h("button", { onclick: () => this.showExport(), title: `Exportera eller kopiera för publicering (${modKey}+E)` }, "Exportera"),
+        h("button", { onclick: () => this.searchBar.open(), title: `Sök och ersätt (${modKey}+F)` }, "Sök"),
       ),
       this.titleBtn,
       h(
@@ -200,6 +210,7 @@ class App {
       topbar,
       this.banner,
       this.updateNotice,
+      this.searchBar.el,
       h("main", { class: "page" }, host),
       statusbar,
       this.docsDrawer,
@@ -274,6 +285,12 @@ class App {
     this.updateTitle();
     this.updateStats(doc.content);
     this.hideBanner();
+    this.searchBar.refresh();
+    const local = localCopy(doc.name);
+    if (local) {
+      if (local.content === doc.content) dropLocal(doc.name);
+      else this.showRecover(local);
+    }
     try {
       localStorage.setItem(LAST_DOC_KEY, doc.name);
     } catch {
@@ -333,7 +350,13 @@ class App {
   private onChange(): void {
     // Markdown serialiseras inte här (dyrt i långa manus) – först vid sparning.
     this.updateStats();
+    this.searchBar.refresh();
     if (!this.current || this.saveState === "conflict") return;
+    if (this.saveState === "error") {
+      // Servern svarar inte: håll reservkopian aktuell och vänta på nästa försök.
+      keepLocal({ name: this.current.name, content: this.editor.getMarkdown(), base: this.current.modified });
+      return;
+    }
     this.setSaveState("dirty");
     window.clearTimeout(this.saveTimer);
     this.saveTimer = window.setTimeout(() => void this.save(), AUTOSAVE_MS);
@@ -355,6 +378,10 @@ class App {
         const r = await api.save(cur.name, content, force ? null : cur.modified, snapshot);
         cur.modified = r.modified;
         this.lastSaved = content;
+        dropLocal(cur.name);
+        window.clearTimeout(this.retryTimer);
+        if (this.saveErrorShown) toast("Sparat igen – servern svarar");
+        this.saveErrorShown = false;
         this.setSaveState(this.editor.getMarkdown() === content ? "saved" : "dirty");
         if (snapshot) toast("Sparat – en version har lagts i historiken");
         if (this.historyDrawer.classList.contains("open")) void this.renderHistory();
@@ -363,14 +390,72 @@ class App {
           this.setSaveState("conflict");
           this.showConflict();
         } else {
+          // Behåll texten i webbläsaren och försök igen tills servern svarar.
+          const kept = keepLocal({ name: cur.name, content: this.editor.getMarkdown(), base: cur.modified });
           this.setSaveState("error");
-          toast(`Kunde inte spara: ${errorText(e)}`);
+          const retryable = !(e instanceof ApiError) || e.status >= 500;
+          if (!this.saveErrorShown) {
+            toast(
+              `Kunde inte spara: ${errorText(e)}.` +
+                (kept ? " Texten finns kvar i webbläsaren." : "") +
+                (retryable ? " Försöker igen." : ""),
+            );
+            this.saveErrorShown = true;
+          }
+          window.clearTimeout(this.retryTimer);
+          if (retryable) this.retryTimer = window.setTimeout(() => void this.retrySave(), RETRY_MS);
         }
       } finally {
         this.savePromise = null;
       }
     })();
     await this.savePromise;
+  }
+
+  private async retrySave(): Promise<void> {
+    if (this.saveState !== "error" || !this.current) return;
+    // Ändringstiden kan vara inaktuell om sparningen lyckades men svaret gick förlorat.
+    await this.save(false, false);
+  }
+
+  /** Text som inte hann sparas (t.ex. för att containern startades om) erbjuds tillbaka. */
+  private showRecover(local: Unsaved): void {
+    const name = local.name;
+    this.banner.replaceChildren(
+      h("span", {}, `Det finns text i ”${name}” från ${formatDate(new Date(local.time)).toLowerCase()} som inte hann sparas.`),
+      h(
+        "button",
+        {
+          onclick: () => {
+            dropLocal(name);
+            this.hideBanner();
+          },
+        },
+        "Släng den",
+      ),
+      h(
+        "button",
+        {
+          class: "primary",
+          onclick: async () => {
+            this.hideBanner();
+            if (this.current?.name !== name) return;
+            try {
+              await api.snapshot(name, "Före återställning av osparad text");
+            } catch {
+              /* ingen ändring att spara – gör inget */
+            }
+            this.editor.load(local.content);
+            this.updateStats();
+            this.setSaveState("dirty");
+            await this.save(false, true);
+            if (this.saveState === "saved") toast("Den osparade texten är återställd – den tidigare finns i historiken");
+          },
+        },
+        "Återställ den",
+      ),
+    );
+    this.banner.hidden = false;
   }
 
   /** Spara direkt om något är osparat (inför byte av dokument m.m.). */
@@ -385,11 +470,13 @@ class App {
       saved: "Sparat",
       dirty: "Osparade ändringar",
       saving: "Sparar …",
-      error: "Fel vid sparning",
+      error: "Inte sparat – försöker igen",
       conflict: "Konflikt",
     };
     this.statusSave.textContent = text[state];
     this.statusSave.dataset.state = state;
+    this.statusSave.title =
+      state === "error" ? "Servern svarar inte. Texten finns kvar i webbläsaren och sparas när servern är tillbaka." : "";
   }
 
   private showConflict(): void {
@@ -475,6 +562,7 @@ class App {
   // ---------------- vy & statistik ----------------
   private setView(mode: ViewMode, focus = true): void {
     this.editor.setMode(mode);
+    this.searchBar.rerun();
     for (const [m, btn] of Object.entries(this.viewBtns)) {
       btn.setAttribute("aria-pressed", String(m === mode));
     }
@@ -528,6 +616,9 @@ class App {
       [`${modKey}+/`, "Växla mellan Skriv och Markdown"],
       [`${modKey}+O`, "Dokumentlistan"],
       [`${modKey}+E`, "Exportera"],
+      [`${modKey}+Shift+C`, "Kopiera texten för publicering (HTML och ren text)"],
+      [`${modKey}+F / ${modKey}+Alt+F`, "Sök / sök och ersätt"],
+      [`Enter / Shift+Enter, ${modKey}+G`, "Nästa / föregående träff"],
       [`${modKey}+J`, "AI-assistent"],
       [`${modKey}+.`, "Infoga tecken (citattecken, tankstreck m.m.)"],
       ['" \' -- ... 12-15', "Blir ” ’ – … 12–15 automatiskt (Backsteg ångrar)"],
@@ -674,6 +765,23 @@ class App {
       ),
       list,
       h("p", { class: "meta hint-drop" }, "Du kan också släppa filer var som helst i fönstret för att importera dem."),
+      h(
+        "div",
+        { class: "drawer-foot" },
+        h("button", { class: "link", onclick: () => this.showTrash() }, "Papperskorgen …"),
+        h(
+          "button",
+          {
+            class: "link",
+            title: "Alla dokument, versioner, AI-samtal, papperskorgen och inställningar i en zip-fil",
+            onclick: async () => {
+              await this.flush();
+              await this.download("/api/backup", "Laddade ner");
+            },
+          },
+          "Ladda ner allt (zip)",
+        ),
+      ),
     );
   }
 
@@ -1239,6 +1347,45 @@ class App {
         h("p", { class: "meta" }, "Mallen gäller Word och OpenDocument. Titel och författare i frontmatter (title, author) följer med som dokumentegenskaper."),
         h(
           "div",
+          { class: "publish-copy" },
+          h("h3", {}, "Kopiera för publicering"),
+          h(
+            "p",
+            { class: "meta" },
+            `Lägger texten i urklipp med rubriker, fet och kursiv stil, citat och listor – klar att klistra in i WordPress eller ett annat publiceringssystem. Kortkommando: ${modKey}+Shift+C.`,
+          ),
+          h(
+            "div",
+            { class: "row" },
+            h(
+              "label",
+              { class: "check small" },
+              h("input", {
+                type: "checkbox",
+                checked: this.publishWithTitle(),
+                onchange: (e: Event) => {
+                  try {
+                    localStorage.setItem(PUBLISH_TITLE_KEY, String((e.target as HTMLInputElement).checked));
+                  } catch {
+                    /* ignorera */
+                  }
+                },
+              }),
+              h("span", {}, "Ta med huvudrubriken"),
+            ),
+            h(
+              "button",
+              {
+                onclick: async () => {
+                  if (await this.copyForPublishing()) close();
+                },
+              },
+              "Kopiera",
+            ),
+          ),
+        ),
+        h(
+          "div",
           { class: "actions" },
           h("button", { onclick: close }, "Avbryt"),
           h(
@@ -1264,7 +1411,112 @@ class App {
     });
   }
 
-  private async download(url: string): Promise<void> {
+  private publishWithTitle(): boolean {
+    try {
+      return localStorage.getItem(PUBLISH_TITLE_KEY) !== "false";
+    } catch {
+      return true;
+    }
+  }
+
+  /** Kopierar texten som HTML och ren text för ett publiceringssystem. */
+  private async copyForPublishing(withTitle = this.publishWithTitle()): Promise<boolean> {
+    if (!this.current) return false;
+    const { html, text } = publishContent(this.editor.getMarkdown(), withTitle);
+    if (!text.trim()) {
+      toast("Det finns ingen text att kopiera");
+      return false;
+    }
+    try {
+      await copyRich(html, text);
+      toast(withTitle ? "Texten är kopierad – klistra in i publiceringssystemet" : "Texten är kopierad utan huvudrubrik");
+      return true;
+    } catch (e) {
+      toast(`Kunde inte kopiera: ${errorText(e)}`);
+      return false;
+    }
+  }
+
+  // ---------------- papperskorgen ----------------
+  private async showTrash(): Promise<void> {
+    await showModal((close) => {
+      const list = h("ul", { class: "list trash-list" }, h("li", { class: "empty" }, "Hämtar …"));
+      const load = async () => {
+        let items;
+        try {
+          items = await api.trash();
+        } catch (e) {
+          list.replaceChildren(h("li", { class: "empty" }, errorText(e)));
+          return;
+        }
+        if (!items.length) {
+          list.replaceChildren(h("li", { class: "empty" }, "Papperskorgen är tom."));
+          return;
+        }
+        list.replaceChildren(
+          ...items.map((it) => {
+            const when = formatDate(new Date(it.deleted)).toLowerCase();
+            const title =
+              it.kind === "document" ? it.name : `AI-samtal: ${it.title ?? "Samtal"}`;
+            const extra =
+              it.kind === "document"
+                ? [
+                    `${(it.words ?? 0).toLocaleString("sv-SE")} ord`,
+                    it.history ? "med historik" : "",
+                    it.chats ? `${it.chats} AI-samtal` : "",
+                  ]
+                : [`om ”${it.name}”`, `${it.messages ?? 0} meddelanden`];
+            return h(
+              "li",
+              {},
+              h(
+                "div",
+                { class: "item static" },
+                h("span", { class: "name" }, title),
+                h("span", { class: "meta" }, [...extra.filter(Boolean), `borttaget ${when}`].join(" · ")),
+              ),
+              h(
+                "button",
+                {
+                  onclick: async () => {
+                    try {
+                      const r = await api.restoreTrash(it.id);
+                      this.ai.forget(r.name);
+                      if (r.kind === "document") {
+                        toast(r.name === it.name ? `Återställde ”${r.name}”` : `Återställde som ”${r.name}” (namnet var upptaget)`);
+                      } else {
+                        toast(`Återställde AI-samtalet om ”${r.name}”`);
+                      }
+                      if (this.docsDrawer.classList.contains("open")) void this.renderDocs();
+                      await load();
+                    } catch (e) {
+                      toast(errorText(e));
+                    }
+                  },
+                },
+                "Återställ",
+              ),
+            );
+          }),
+        );
+      };
+      void load();
+      return h(
+        "div",
+        { class: "trash-modal" },
+        h("h2", {}, "Papperskorgen"),
+        h(
+          "p",
+          { class: "meta" },
+          "Borttagna dokument (med historik och AI-samtal) och borttagna AI-samtal. Inget raderas på riktigt – filerna finns i datamappen under .trash.",
+        ),
+        list,
+        h("div", { class: "actions" }, h("button", { class: "primary", onclick: close }, "Stäng")),
+      );
+    });
+  }
+
+  private async download(url: string, done = "Exporterade"): Promise<void> {
     // Hämta först, så att fel kan visas i stället för en trasig nedladdning.
     try {
       const res = await fetch(url);
@@ -1280,15 +1532,16 @@ class App {
       const blob = await res.blob();
       const cd = res.headers.get("content-disposition") ?? "";
       const m = /filename\*=UTF-8''([^;]+)/i.exec(cd);
-      const filename = m ? decodeURIComponent(m[1]) : "dokument";
+      const plain = /filename="([^"]+)"/i.exec(cd);
+      const filename = m ? decodeURIComponent(m[1]) : (plain?.[1] ?? "dokument");
       const a = h("a", { href: URL.createObjectURL(blob), download: filename });
       document.body.append(a);
       a.click();
       a.remove();
       window.setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
-      toast(`Exporterade ${filename}`);
+      toast(`${done} ${filename}`);
     } catch (e) {
-      toast(`Kunde inte exportera: ${errorText(e)}`);
+      toast(`Kunde inte ladda ner: ${errorText(e)}`);
     }
   }
 
@@ -1573,11 +1826,24 @@ class App {
       } else if (isMod(e) && e.key.toLowerCase() === "e") {
         e.preventDefault();
         void this.showExport();
+      } else if (isMod(e) && e.code === "KeyF") {
+        e.preventDefault();
+        this.searchBar.open(e.altKey);
+      } else if ((isMod(e) && e.code === "KeyG") || e.key === "F3") {
+        if (this.searchBar.isOpen) {
+          e.preventDefault();
+          this.searchBar.step(e.shiftKey ? -1 : 1);
+        }
+      } else if (isMod(e) && e.shiftKey && e.code === "KeyC") {
+        e.preventDefault();
+        void this.copyForPublishing();
       } else if (isMod(e) && e.key.toLowerCase() === "o") {
         e.preventDefault();
         this.toggleDrawer(this.docsDrawer);
       } else if (e.key === "Escape" && !document.querySelector("dialog[open]")) {
-        if (document.querySelector(".drawer.open, .popover.open")) {
+        if (this.searchBar.isOpen && !document.querySelector(".drawer.open, .popover.open")) {
+          this.searchBar.close();
+        } else if (document.querySelector(".drawer.open, .popover.open")) {
           this.closeDrawers();
           this.editor.focus();
         }
@@ -1624,8 +1890,14 @@ class App {
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "hidden") void this.flush();
     });
+    window.addEventListener("online", () => void this.retrySave());
+    window.addEventListener("focus", () => void this.retrySave());
     window.addEventListener("beforeunload", (e) => {
-      if (this.saveState === "dirty" || this.saveState === "saving") {
+      if (this.current && ["dirty", "saving", "error"].includes(this.saveState)) {
+        // Hinner sparningen inte klart finns texten kvar i webbläsaren.
+        keepLocal({ name: this.current.name, content: this.editor.getMarkdown(), base: this.current.modified });
+      }
+      if (this.saveState === "dirty" || this.saveState === "saving" || this.saveState === "error") {
         void this.flush();
         e.preventDefault();
       }

@@ -179,3 +179,38 @@ def test_real_unreachable_host_is_fast(tmp_path):
     t = time.monotonic()
     assert c.get("/api/ai/status").json()["enabled"] is False
     assert time.monotonic() - t < 5
+
+
+def test_chat_is_saved_by_server(client, fake):
+    client.post("/api/documents", json={"name": "Krönika", "content": "# Krönika\n\nText.\n"})
+    body = {"model": "qwen3.6:35b", "document": "# Krönika", "quick": "repetition", "label": "Hitta upprepningar",
+            "document_name": "Krönika", "chat_id": "c1"}
+    events(client.post("/api/ai/chat", json=body))
+    chat = client.get("/api/documents/Krönika/chats/c1").json()
+    user, answer = chat["messages"]
+    assert user["label"] == "Hitta upprepningar" and user["content"]  # snabbvalets faktiska fråga
+    assert answer["content"] == "1. ”vår tid och samtid” är en dubblering."
+    assert answer["thinking"] == "Jag funderar."
+    assert answer["meta"] == "qwen3.6:35b · 1.5 s · 100 tokens/s"
+    assert chat["model"] == "qwen3.6:35b"
+    # Följdfråga läggs till sist i samma samtal.
+    body2 = {"model": "qwen3.6:35b", "document": "# Krönika", "prompt": "Och ingressen?", "document_name": "Krönika",
+             "chat_id": "c1", "history": [{"role": "user", "content": user["content"]},
+                                          {"role": "assistant", "content": answer["content"]}]}
+    events(client.post("/api/ai/chat", json=body2))
+    msgs = client.get("/api/documents/Krönika/chats/c1").json()["messages"]
+    assert [m["role"] for m in msgs] == ["user", "assistant", "user", "assistant"]
+    assert msgs[2] == {"role": "user", "content": "Och ingressen?"}
+
+
+def test_chat_error_is_saved_and_validation(client, fake):
+    client.post("/api/documents", json={"name": "Doc"})
+    fake.fail = True
+    events(client.post("/api/ai/chat", json={"prompt": "Hej", "document_name": "Doc", "chat_id": "c1"}))
+    msgs = client.get("/api/documents/Doc/chats/c1").json()["messages"]
+    assert msgs[1]["error"].startswith("Ollama svarade med fel")
+    assert client.post("/api/ai/chat", json={"prompt": "Hej", "document_name": "Saknas", "chat_id": "c1"}).status_code == 404
+    assert client.post("/api/ai/chat", json={"prompt": "Hej", "document_name": "Doc", "chat_id": "../x"}).status_code == 400
+    # Utan dokument och id sparas inget (som förut).
+    fake.fail = False
+    assert client.post("/api/ai/chat", json={"prompt": "Hej"}).status_code == 200

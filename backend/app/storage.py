@@ -440,3 +440,119 @@ def delete_chat(storage: Storage, name: str, cid: str) -> None:
         trash.mkdir(exist_ok=True)
         stamp = _now().strftime("%Y%m%dT%H%M%S")
         os.replace(path, trash / f"{stamp}-{validate_name(name)}.chat-{cid}.json")
+
+
+def append_chat(storage: Storage, name: str, cid: str, messages: list[dict], model: str = "") -> dict:
+    """Lägger till meddelanden sist i ett samtal (skapar det om det saknas)."""
+    with storage._lock:
+        storage._require(name)
+        path = storage._chat_path(name, cid)
+        existing: list = []
+        if path.exists():
+            try:
+                existing = json.loads(path.read_text(encoding="utf-8")).get("messages", [])
+            except (OSError, ValueError, AttributeError):
+                existing = []
+        combined = (existing if isinstance(existing, list) else []) + messages
+        return save_chat(storage, name, cid, combined[-MAX_CHAT_MESSAGES:], model)
+
+
+# ---------- papperskorgen ----------
+_TRASH_DOC = re.compile(r"^(\d{8}T\d{6})-(.+)\.md$")
+_TRASH_CHAT = re.compile(r"^(\d{8}T\d{6})-(.+)\.chat-([0-9A-Za-z_-]{1,64})\.json$")
+
+
+def _stamp_iso(stamp: str) -> str:
+    return datetime.strptime(stamp, "%Y%m%dT%H%M%S").replace(tzinfo=timezone.utc).isoformat(timespec="seconds")
+
+
+def list_trash(storage: Storage) -> list[dict]:
+    """Borttagna dokument och samtal, senast borttagna först."""
+    trash = storage.root / ".trash"
+    items = []
+    for p in trash.iterdir() if trash.exists() else []:
+        if not p.is_file():
+            continue  # historik- och samtalsmappar hör till ett dokument
+        if m := _TRASH_DOC.match(p.name):
+            try:
+                words = count_words(p.read_text(encoding="utf-8"))
+            except OSError:
+                words = 0
+            stamp, name = m.group(1), m.group(2)
+            chats_dir = trash / f"{stamp}-{name}.chats"
+            items.append({
+                "id": p.name,
+                "kind": "document",
+                "name": name,
+                "deleted": _stamp_iso(stamp),
+                "words": words,
+                "history": (trash / f"{stamp}-{name}.history").is_dir(),
+                "chats": len(list(chats_dir.glob("*.json"))) if chats_dir.is_dir() else 0,
+            })
+        elif m := _TRASH_CHAT.match(p.name):
+            try:
+                chat = json.loads(p.read_text(encoding="utf-8"))
+                title, count = _chat_title(chat["messages"]), len(chat["messages"])
+            except (OSError, ValueError, KeyError, TypeError):
+                title, count = "Samtal", 0
+            items.append({
+                "id": p.name,
+                "kind": "chat",
+                "name": m.group(2),
+                "deleted": _stamp_iso(m.group(1)),
+                "title": title,
+                "messages": count,
+            })
+    return sorted(items, key=lambda i: i["deleted"], reverse=True)
+
+
+def restore_trash(storage: Storage, entry: str) -> dict:
+    """Återställer en post. Ett dokument får ett nytt namn om namnet är upptaget."""
+    trash = storage.root / ".trash"
+    if "/" in entry or "\\" in entry or entry.startswith("."):
+        raise StorageError("Ogiltig post.")
+    src = trash / entry
+    if not src.is_file():
+        raise NotFound("Posten finns inte i papperskorgen.")
+    with storage._lock:
+        if m := _TRASH_DOC.match(entry):
+            stamp, old = m.group(1), m.group(2)
+            base = old
+            if storage._doc_path(old).exists():
+                base = f"{old} (återställd)"
+            name = storage.unique_name(base)
+            os.replace(src, storage._doc_path(name))
+            for suffix, target in ((".history", storage._hist_dir(name)), (".chats", storage._chat_dir(name))):
+                companion = trash / f"{stamp}-{old}{suffix}"
+                if companion.is_dir() and not target.exists():
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(companion), str(target))
+            return {"kind": "document", "name": name}
+        if m := _TRASH_CHAT.match(entry):
+            name, cid = m.group(2), m.group(3)
+            if not storage._doc_path(name).is_file():
+                raise StorageError(f"Dokumentet ”{name}” finns inte. Återställ dokumentet först.")
+            target = storage._chat_path(name, cid)
+            n = 2
+            while target.exists():
+                target = storage._chat_path(name, f"{cid[:60]}-{n}")
+                n += 1
+            target.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(src, target)
+            return {"kind": "chat", "name": name, "id": target.stem}
+    raise StorageError("Okänd post i papperskorgen.")
+
+
+# ---------- säkerhetskopia ----------
+def backup_zip(storage: Storage) -> bytes:
+    """Hela datamappen som zip (dokument, historik, samtal, papperskorg, inställningar)."""
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with storage._lock, zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for p in sorted(storage.root.rglob("*")):
+            if not p.is_file() or p.name.startswith(".tmp-"):
+                continue
+            zf.write(p, p.relative_to(storage.root).as_posix())
+    return buf.getvalue()

@@ -18,7 +18,20 @@ from .ai import QUICK_PROMPTS, AIError, OllamaClient, build_messages, context_si
 from .config import Settings
 from .convert import EXPORT_FORMATS, MAX_IMPORT_BYTES, TEMPLATE_LABELS, ConvertError, export_document, import_file
 from .language import Language, normalize_entry
-from .storage import SettingsStore, Storage, StorageError, delete_chat, list_chats, read_chat, safe_name, save_chat
+from .storage import (
+    SettingsStore,
+    Storage,
+    StorageError,
+    append_chat,
+    backup_zip,
+    delete_chat,
+    list_chats,
+    list_trash,
+    read_chat,
+    restore_trash,
+    safe_name,
+    save_chat,
+)
 
 
 class CreateDoc(BaseModel):
@@ -57,6 +70,10 @@ class ChatRequest(BaseModel):
     document: str = Field(default="", max_length=1_000_000)
     selection: str = Field(default="", max_length=1_000_000)
     history: list[ChatMessage] = Field(default_factory=list, max_length=100)
+    # Om dessa anges sparar servern fråga och svar i samtalet – även om fliken stängs.
+    document_name: str | None = Field(default=None, max_length=200)
+    chat_id: str | None = Field(default=None, max_length=64)
+    label: str = Field(default="", max_length=200)
 
 
 class SaveChat(BaseModel):
@@ -212,14 +229,41 @@ def create_app(settings: Settings | None = None, ai_transport: httpx.AsyncBaseTr
             raise HTTPException(400, str(exc)) from exc
         num_ctx = context_size(sum(len(m["content"]) for m in messages))
         question = messages[-1]["content"]
+        save_to = None
+        if body.document_name and body.chat_id:
+            storage._require(body.document_name)
+            storage._chat_path(body.document_name, body.chat_id)  # validerar id
+            save_to = (body.document_name, body.chat_id)
 
         async def events():
-            yield json.dumps({"type": "start", "question": question}, ensure_ascii=False) + "\n"
+            answer = {"role": "assistant", "content": "", "thinking": "", "meta": "", "error": ""}
+            model = body.model or (ollama.default_model if ollama else "")
+            finished = False
             try:
+                yield json.dumps({"type": "start", "question": question}, ensure_ascii=False) + "\n"
                 async for ev in ollama.chat(body.model, messages, body.think, num_ctx):
+                    if ev["type"] in ("thinking", "content"):
+                        answer[ev["type"]] += ev["text"]
+                    elif ev["type"] == "done":
+                        model = ev.get("model") or model
+                        tps = f" · {round(ev['tokens_per_second'])} tokens/s" if ev.get("tokens_per_second") else ""
+                        answer["meta"] = f"{model} · {ev['seconds']:g} s{tps}"
                     yield json.dumps(ev, ensure_ascii=False) + "\n"
+                finished = True
             except AIError as exc:
+                answer["error"] = str(exc)
+                finished = True
                 yield json.dumps({"type": "error", "message": str(exc)}, ensure_ascii=False) + "\n"
+            finally:
+                # Körs också när webbläsaren kopplar ner (fliken stängs, Stoppa).
+                if save_to:
+                    if not finished and not answer["meta"]:
+                        answer["meta"] = "Avbrutet"
+                    user = {"role": "user", "content": question if body.quick else body.prompt, "label": body.label}
+                    try:
+                        append_chat(storage, *save_to, [user, answer], model)
+                    except (StorageError, OSError) as exc:
+                        log.warning("Kunde inte spara AI-samtalet: %s", exc)
 
         return StreamingResponse(events(), media_type="application/x-ndjson")
 
@@ -331,6 +375,26 @@ def create_app(settings: Settings | None = None, ai_transport: httpx.AsyncBaseTr
     @app.delete("/api/documents/{name}/chats/{cid}", status_code=204)
     def remove_chat(name: str, cid: str) -> None:
         delete_chat(storage, name, cid)
+
+    # ---------- papperskorg och säkerhetskopia ----------
+    @app.get("/api/trash")
+    def get_trash() -> list[dict]:
+        return list_trash(storage)
+
+    @app.post("/api/trash/{entry}/restore")
+    def post_restore(entry: str) -> dict:
+        return restore_trash(storage, entry)
+
+    @app.get("/api/backup")
+    def get_backup() -> Response:
+        from datetime import datetime
+
+        filename = f"word-work-{datetime.now().strftime('%Y-%m-%d')}.zip"
+        return Response(
+            backup_zip(storage),
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
 
     # ---------- import & export ----------
     @app.get("/api/export/formats")

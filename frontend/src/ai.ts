@@ -5,11 +5,13 @@
  * Citat i svaren som finns i texten blir klickbara och markerar stället i
  * texten, så att författaren själv kan ändra.
  *
- * Samtalen sparas per dokument i datamappen (.chats/<dokument>/<id>.json).
+ * Samtalen sparas per dokument i datamappen (.chats/<dokument>/<id>.json). Det är
+ * servern som sparar fråga och svar, så att inget försvinner om fliken stängs
+ * mitt i ett svar.
  */
 import DOMPurify from "dompurify";
 import { marked } from "marked";
-import { api, type AIEvent, type AIModel, type AIStatus, type ChatSummary, type StoredMessage } from "./api";
+import { api, type AIEvent, type AIModel, type AIStatus, type ChatSummary } from "./api";
 import { confirm, formatDate, h, modKey, toast } from "./ui";
 
 interface Message {
@@ -36,11 +38,6 @@ export interface AIPrefs {
 function newId(): string {
   const rand = Math.random().toString(36).slice(2, 8);
   return `${new Date().toISOString().replace(/[:.]/g, "-")}-${rand}`;
-}
-
-function toStored(m: Message): StoredMessage {
-  const { role, content, label, thinking, meta, error } = m;
-  return { role, content, label, thinking, meta, error };
 }
 
 export interface AIPanelDeps {
@@ -199,18 +196,21 @@ export class AIPanel {
     if (!this.conversations.has(doc)) this.conversations.set(doc, conv);
   }
 
-  /** Sparar samtalet (pågående svar sparas när de är klara). */
-  private async persist(conv: Conversation): Promise<void> {
+  /** Hämtar listan över sparade samtal på nytt (servern har sparat ett svar). */
+  private async refreshSummaries(conv: Conversation, retry = true): Promise<void> {
     const doc = [...this.conversations].find(([, c]) => c === conv)?.[0];
-    const messages = conv.messages.filter((m) => !m.pending).map(toStored);
-    if (!doc || !messages.length) return;
+    if (!doc) return;
+    let list: ChatSummary[];
     try {
-      const summary = await api.saveChat(doc, conv.id, this.model, messages);
-      const list = (this.summaries.get(doc) ?? []).filter((c) => c.id !== summary.id);
-      this.summaries.set(doc, [summary, ...list]);
-      if (doc === this.deps.documentName()) this.renderHistory();
-    } catch (e) {
-      toast(`AI-samtalet kunde inte sparas: ${e instanceof Error ? e.message : String(e)}`);
+      list = await api.chats(doc);
+    } catch {
+      return;
+    }
+    this.summaries.set(doc, list);
+    if (doc === this.deps.documentName()) this.renderHistory();
+    // Vid Stoppa sparar servern strax efter att anslutningen stängts.
+    if (retry && !list.some((c) => c.id === conv.id)) {
+      window.setTimeout(() => void this.refreshSummaries(conv, false), 800);
     }
   }
 
@@ -276,6 +276,14 @@ export class AIPanel {
       this.renderHistory();
       this.renderMessages();
     }
+  }
+
+  /** Glöm cachade samtal för ett dokument (t.ex. efter återställning ur papperskorgen). */
+  forget(doc: string): void {
+    if (this.controller && doc === this.deps.documentName()) return;
+    this.conversations.delete(doc);
+    this.summaries.delete(doc);
+    if (doc === this.deps.documentName() && this.deps.drawer.classList.contains("open")) void this.render();
   }
 
   /** Dokumentet har bytt namn – samtalen följer med (servern flyttar filerna). */
@@ -460,7 +468,7 @@ export class AIPanel {
     this.controller = new AbortController();
     this.sendBtn.textContent = "Stoppa";
     this.renderHistory();
-    void this.persist(conv);
+    const docName = this.deps.documentName() ?? undefined;
     try {
       await api.aiChat(
         {
@@ -471,6 +479,9 @@ export class AIPanel {
           document: this.deps.documentText(),
           selection,
           history,
+          document_name: docName,
+          chat_id: docName ? conv.id : undefined,
+          label: quick ? QUICK_LABELS[quick] : "",
         },
         (e: AIEvent) => {
           if (e.type === "start") {
@@ -500,7 +511,7 @@ export class AIPanel {
       this.sendBtn.textContent = "Fråga";
       this.renderMessages();
       this.renderHistory();
-      await this.persist(conv);
+      await this.refreshSummaries(conv);
     }
   }
 

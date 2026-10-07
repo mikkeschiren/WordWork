@@ -16,7 +16,7 @@ Baserad på `PLAN.md`. Målet är en distraktionsfri ordbehandlare för kulturjo
 | Stavning | **Hunspell-format** + svensk ordlista (`sv_SE`, LibreOffice/DSSO) via `spylls` (ren Python) | Klarar svenska sammansättningar bättre än rena JS-alternativ; inga systempaket behövs. |
 | Synonymer | **Synlex (Folkets synonymlexikon, KTH)** i LibreOffice/MyThes-format | Fritt svenskt synonymlexikon; ligger i repot och läses in i minnet vid start. |
 | AI | **Ollama** – lokal eller extern instans, via backend-proxy | Texten stannar hos användaren. Adress och modell väljs via miljövariabel. |
-| Lagring | Filer i monterad volym `/data` (Markdown) + ögonblicksbilder i `/data/.history/` | Användaren äger sina filer, enkel backup, versionshistorik. |
+| Lagring | Filer i monterad volym `/data` (Markdown) + ögonblicksbilder i `/data/.history/`, AI-samtal i `/data/.chats/`, inställningar i `/data/.wordwork/` | Användaren äger sina filer, enkel backup, versionshistorik. |
 | Användare | **Lokal enanvändarapp** | Ingen inloggning; containern binds till `127.0.0.1`. |
 | Container | Multi-stage build: `cgr.dev/chainguard/node` (bygga frontend) → `cgr.dev/chainguard/python` (runtime) | Minimal, säker image enligt kravet på Wolfi. |
 
@@ -131,7 +131,7 @@ Baserad på `PLAN.md`. Målet är en distraktionsfri ordbehandlare för kulturjo
 ### Fas 5 – Polering och release (≈ 1 vecka)
 - Kortkommandon, tillgänglighet (kontrast, tangentbordsnavigering).
 - Prestanda med långa manus (100 000+ ord): stavning/statistik i bakgrund och på synliga delar.
-- Säkerhet: port binds till `127.0.0.1`; image-skanning (Grype/Trivy), SBOM.
+- Säkerhet: port binds till `127.0.0.1`, Host-kontroll, CSP; image-skanning (Grype/Scout), SBOM (Syft).
 - Dokumentation: README, konfiguration, backup.
 - **Leverans:** v1.0 publicerad som image.
 
@@ -202,4 +202,53 @@ Baserad på `PLAN.md`. Målet är en distraktionsfri ordbehandlare för kulturjo
   - AI stängs av automatiskt när Ollama-servern inte kan nås eller saknar chattmodell, och slås på igen när den svarar. Kontrollen har 3 s tidsgräns och cachas i 15–30 s. Resten av appen påverkas inte.
   - Den egna ordlistan kan redigeras: ändra en post direkt, sök, redigera hela listan som text. Ändringar som görs direkt i `ordlista.txt` läses in automatiskt.
 - **Ej gjort i fas 4:** samtalen sparas inte mellan sessioner, utan ligger i minnet per dokument.
-- **Nästa:** fas 5 – polering, tillgänglighet, prestanda för långa manus, säkerhet och release.
+- **Fas 5 – klar (2026-10-07), version 1.0.0:**
+  - "Utseende" har bytt namn till "Inställningar".
+  - **Prestanda** (uppmätt med ett manus på 100 000 ord):
+    - Markdown serialiseras först vid sparning, inte vid varje paus.
+    - Statusraden använder snabbstatistik (cirka 40 ms i stället för 170 ms). En egen platshållare ersätter TipTaps, som gick igenom hela dokumentet vid varje tangenttryckning.
+    - Stycken utanför skärmen hoppas över vid layout (`content-visibility`).
+    - Resultat: inläsning 1,2 s → 0,7 s, tangenttryckning 31 → 20 ms (median, mätt till nästa bildruta), fördröjning efter paus 250 → cirka 85 ms. Hopp till en position i texten justeras efter rendering.
+  - **Tillgänglighet:**
+    - Kontrast för gråtext höjd till WCAG AA (minst 4,5:1) i alla teman.
+    - Fokus flyttas in i paneler när de öppnas och tillbaka till texten när de stängs. `aria-expanded` och `aria-controls` på panelknappar.
+    - Kortkommandolista med F1.
+  - **Skrivmål** per dag (Inställningar). Framsteg visas i statusraden och summeras över dokument.
+  - **Säkerhet:**
+    - Host-kontroll mot DNS-rebinding (`WW_ALLOWED_HOSTS`).
+    - Content-Security-Policy och säkerhetshuvuden.
+    - Tydligt fel i stället för krasch om datamappen inte går att skriva i (`/api/health` och en banner i appen).
+  - **Release:**
+    - Version 1.0.0 syns i `/api/health` och i Inställningar, och imagen har OCI-etiketter.
+    - README har avsnitt om säkerhet, säkerhetskopiering, uppdatering, felsökning och skanning/SBOM.
+- **Version 1.1 (2026-10-07) – typografi:**
+  - **Teckenpanel** (⌘.) med sök, tangentbordsstyrning och senast använda tecken.
+  - **Automatiska ersättningar** via TipTap-inmatningsregler, där Backsteg ångrar. Citatstil ”…”, »…» eller raka. Gäller bara Skriv-vyn och aldrig kod.
+  - **"Rätta typografin i texten"** med förhandsvisning per rad, och en version i historiken innan ändringen.
+  - **"Infoga tecken …"** i högerklicksmenyn.
+  - **Två rättningar på köpet:**
+    - Tomma stycken sparas inte längre som `&nbsp;` i filen.
+    - `content-visibility` från fas 5 kunde flytta markören vid mycket snabbt skrivande i nya stycken. Den gäller nu bara dokument med fler än 300 stycken och aldrig det aktuella stycket. Optimeringen slås på redan vid första renderingen, vilket också gav bättre siffror: inläsning cirka 0,6 s och tangenttryckning cirka 15 ms för 100 000 ord.
+- **Version 1.1.1 (2026-10-07) – rättning av automatisk typografi:**
+  - **Replikstreck:** `-- ` först i ett stycke blir `– `. Tidigare gjordes ingenting där, eftersom regeln för tankstreck undvek radbörjan (för `---`).
+  - **Enter gav fel:** TipTap kör inmatningsreglerna även för Enter. Därför kunde `-- `, ` -` och `12-15` sluka radbrytningen. Reglerna matchar nu bara mellanslag, aldrig radbrytning.
+- **Version 1.2.0 (2026-10-07) – inställningar och AI-samtal sparas:**
+  - **Filer, inte SQLite.** Datamappen ligger ofta på värddatorn och synkas ibland via moln. SQLite är känsligt för låsning och korruption där, medan atomärt skrivna JSON-filer klarar sig. Det stämmer också med resten av appen: allt är läsbara filer, och säkerhetskopiering är att kopiera mappen. Lagringen ligger samlad i `storage.py`, så ett byte senare (till exempel för fritextsökning i samtal) rör bara den.
+  - **Inställningar** i `.wordwork/settings.json` via `GET/PUT /api/settings`. Frontend äger formatet, och okända eller felaktiga värden ignoreras. Webbläsaren har en kopia för snabb start, utan att temat blinkar. Vid första start flyttas webbläsarens gamla inställningar (även AI-modell och *Tänk efter först*) till servern. Ändringar samlas i 0,4 s och sparas också om fliken stängs.
+  - **AI-samtal** i `.chats/<dokument>/<id>.json` via `GET/PUT/DELETE /api/documents/{namn}/chats[/{id}]`. Det senaste samtalet öppnas automatiskt. Det finns en lista med tidigare samtal, *Nytt samtal* (ersätter *Rensa samtalet*) och *Ta bort* (till papperskorgen). Samtalen följer dokumentet vid namnbyte och borttagning. Servern tar bara emot kända fält och rollerna user/assistant, med högst 400 meddelanden och 4 MB per samtal.
+  - **Kvar i webbläsaren:** senaste dokument, vy, senast använda tecken och dagens skrivmål.
+- **Version 1.2.1 (2026-10-07) – gammal kod i öppen flik:**
+  - **Orsak:** AI-samtal sparades inte, men inställningarna verkade sparas. En flik som var öppen när containern byggdes om körde fortfarande den gamla koden. Den sparade inställningar i webbläsaren, men inte samtal. Vid omladdning flyttades inställningarna till servern, men samtalen fanns bara i minnet.
+  - **Rättning:** appen jämför sin version med serverns när fönstret får fokus och varje minut. Skiljer de sig visas *Word Work har uppdaterats … Ladda om*, och texten sparas före omladdningen. `index.html` skickas med `Cache-Control: no-cache`, så att en omladdning alltid hämtar den nya versionen.
+- **Version 1.3.0 (2026-10-07) – grundfunktioner och säkrare lagring:**
+  - **Sök och ersätt** (`search.ts`, `searchbar.ts`):
+    - I Skriv-vyn används ett ProseMirror-tillägg som söker inom stycken och markerar alla träffar och den aktuella.
+    - Vid ändringar flyttas gamla träffar och markeringar. Bara de ändrade styckena söks om. I ett manus på 100 000 ord med 2 865 träffar tar ett tangenttryck cirka 28 ms med sökningen öppen.
+    - *Ersätt alla* är ett enda Ångra-steg.
+    - I Markdown-vyn söks källtexten. Ersättningar görs med `execCommand("insertText")`, så att webbläsarens Ångra fungerar.
+  - **Papperskorgen** (`GET /api/trash`, `POST /api/trash/{post}/restore`): dokument återställs med historik och AI-samtal. Upptagna namn får "(återställd)". Ett samtal kräver att dokumentet finns.
+  - **Kopiera för publicering** (`publish.ts`): Markdown görs om till HTML med `marked` och rensas med DOMPurify, så att bara struktur blir kvar. Ren text läggs bredvid. Allt skrivs till urklipp med ClipboardItem, med `execCommand("copy")` som reserv.
+  - **Servern sparar AI-svaren:** `/api/ai/chat` tar emot `document_name`, `chat_id` och `label`. I `finally` sparas fråga och svar, även när webbläsaren kopplar ner. Svaret får då etiketten "Avbrutet". Klienten skickar inte längre `PUT` för samtal.
+  - **Lokal reservkopia** (`unsaved.ts`): misslyckas en sparning (nätverksfel eller 5xx) sparas texten i `localStorage` och skickas igen var femte sekund, vid fokus och vid `online`. Reservkopian skrivs också vid `beforeunload`. När dokumentet öppnas erbjuds en reservkopia som skiljer sig från serverns text tillbaka. Den gamla texten läggs då i historiken.
+  - **Ladda ner allt** (`GET /api/backup`): hela datamappen som zip.
+- **Kvar efter v1 (förslag):** metadatapanel för frontmatter, nominalkvot, utvärdering av gemma4 för bättre svenska, CI-arbetsflöde (`.github/` kunde inte skrivas härifrån).

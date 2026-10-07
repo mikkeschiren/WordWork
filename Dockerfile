@@ -29,7 +29,7 @@ RUN chmod -R a+rX,go-w /app/app /app/resources /app/venv
 
 # ---------- 3. Körning (distroless, kör som nonroot) ----------
 FROM cgr.dev/chainguard/python:latest
-ARG VERSION=1.2.1
+ARG VERSION=1.3.0
 LABEL org.opencontainers.image.title="Word Work" \
       org.opencontainers.image.description="Distraktionsfri ordbehandlare för kulturjournalister och författare" \
       org.opencontainers.image.version="${VERSION}" \

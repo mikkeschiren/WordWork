@@ -1498,3 +1498,115 @@ dialog.modal:has(.typo-modal) {
 .typo-diff del {
   background: var(--del);
 }
+
+/* ---------- Sök och ersätt ---------- */
+.searchbar {
+  position: fixed;
+  top: 52px;
+  right: 16px;
+  z-index: 16;
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border, color-mix(in srgb, var(--text) 14%, transparent));
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  font-size: 13px;
+}
+
+.searchbar[hidden] {
+  display: none;
+}
+
+.searchbar .row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.searchbar input {
+  width: 15rem;
+  font: inherit;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--text) 18%, transparent);
+  background: var(--bg);
+  color: var(--text);
+}
+
+.searchbar input.no-match {
+  border-color: #c0503c;
+}
+
+.searchbar .count {
+  min-width: 5.5rem;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.searchbar .toggle[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--text);
+}
+
+.searchbar button[disabled] {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.prose .search-match {
+  background: color-mix(in srgb, #e3b341 38%, transparent);
+  border-radius: 2px;
+}
+
+.prose .search-current {
+  background: color-mix(in srgb, #e3b341 85%, transparent);
+  box-shadow: 0 0 0 1px #c9952a;
+  color: #1d1a16;
+}
+
+/* ---------- Dokumentlådans fot, papperskorg, publicering ---------- */
+.drawer-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px 10px 0;
+  border-top: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
+}
+
+.trash-modal {
+  width: min(560px, 90vw);
+}
+
+.trash-list {
+  max-height: 55vh;
+  overflow-y: auto;
+  margin-top: 12px;
+}
+
+.trash-list .item.static {
+  cursor: default;
+}
+
+.publish-copy {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
+}
+
+.publish-copy h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.publish-copy .row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+}

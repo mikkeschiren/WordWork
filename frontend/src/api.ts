@@ -62,6 +62,10 @@ export interface AIChatRequest {
   document: string;
   selection: string;
   history: { role: "user" | "assistant"; content: string }[];
+  /** Servern sparar fråga och svar i det här samtalet. */
+  document_name?: string;
+  chat_id?: string;
+  label?: string;
 }
 
 export interface StoredMessage {
@@ -88,6 +92,18 @@ export interface Chat {
   updated: string;
   model: string;
   messages: StoredMessage[];
+}
+
+export interface TrashItem {
+  id: string;
+  kind: "document" | "chat";
+  name: string;
+  deleted: string;
+  words?: number;
+  history?: boolean;
+  chats?: number;
+  title?: string;
+  messages?: number;
 }
 
 export class ApiError extends Error {
@@ -147,6 +163,9 @@ export const api = {
   history: (name: string) => request<Version[]>("GET", `${doc(name)}/history`),
   settings: () => request<{ saved: boolean; settings: Record<string, unknown> }>("GET", "/settings"),
   saveSettings: (settings: object) => request<{ settings: Record<string, unknown> }>("PUT", "/settings", settings),
+  trash: () => request<TrashItem[]>("GET", "/trash"),
+  restoreTrash: (id: string) =>
+    request<{ kind: "document" | "chat"; name: string; id?: string }>("POST", `/trash/${encodeURIComponent(id)}/restore`),
   chats: (name: string) => request<ChatSummary[]>("GET", `${doc(name)}/chats`),
   chat: (name: string, id: string) => request<Chat>("GET", `${doc(name)}/chats/${encodeURIComponent(id)}`),
   saveChat: (name: string, id: string, model: string, messages: StoredMessage[]) =>

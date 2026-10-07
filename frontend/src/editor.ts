@@ -18,6 +18,19 @@ import { Decoration, DecorationSet, type EditorView } from "@tiptap/pm/view";
 import { TextSelection } from "@tiptap/pm/state";
 import { setHighlight, spellExtension, WordHighlight, type SpellService } from "./spell";
 import { typographyExtension, type TypographyOptions } from "./typography";
+import {
+  buildRegExp,
+  findInText,
+  pmReplace,
+  pmReplaceAll,
+  pmSearch,
+  pmStatus,
+  pmStep,
+  SearchHighlight,
+  type Range,
+  type SearchQuery,
+  type SearchStatus,
+} from "./search";
 
 export type ViewMode = "write" | "markdown";
 
@@ -93,6 +106,10 @@ export class DocEditor {
   private changeTimer: number | undefined;
   mode: ViewMode = "write";
   typewriter = false;
+  /** Aktiv sökning (gäller båda vyerna). */
+  private searchRe: RegExp | null = null;
+  private srcMatches: Range[] = [];
+  private srcCurrent = -1;
 
   constructor(private opts: EditorOptions) {
     this.host = opts.host;
@@ -148,6 +165,13 @@ export class DocEditor {
   getPlainText(): string {
     if (this.editor) return this.editor.getText({ blockSeparator: "\n\n" });
     return stripMarkdown(splitFrontmatter(this.markdown).body);
+  }
+
+  /** Markerad text i aktuell vy (för att fylla i sökfältet). */
+  getSelectedForSearch(): string {
+    if (this.mode === "write") return this.getSelectionText();
+    const ta = this.sourceEl;
+    return ta.value.slice(ta.selectionStart ?? 0, ta.selectionEnd ?? 0);
   }
 
   /** Markerad text i Skriv-vyn (tom sträng om inget är markerat). */
@@ -252,6 +276,101 @@ export class DocEditor {
       this.sourceEl.value = this.markdown;
       this.autoGrow();
     }
+    if (this.searchRe) this.applySearch();
+  }
+
+  // ---------------- sök och ersätt ----------------
+  setSearch(q: SearchQuery | null): SearchStatus {
+    this.searchRe = buildRegExp(q);
+    return this.applySearch();
+  }
+
+  private applySearch(): SearchStatus {
+    if (this.mode === "write" && this.editor) return pmSearch(this.editor.view, this.searchRe);
+    this.srcMatches = findInText(this.sourceEl.value, this.searchRe);
+    const pos = this.sourceEl.selectionStart ?? 0;
+    const i = this.srcMatches.findIndex((m) => m.to > pos);
+    this.srcCurrent = this.srcMatches.length ? (i === -1 ? 0 : i) : -1;
+    return this.srcStatus();
+  }
+
+  private srcStatus(): SearchStatus {
+    return { count: this.srcMatches.length, current: this.srcMatches.length ? this.srcCurrent : -1 };
+  }
+
+  /** Antal träffar efter att texten ändrats. */
+  searchStatus(): SearchStatus {
+    if (this.mode === "write" && this.editor) return pmStatus(this.editor.view);
+    if (!this.searchRe) return { count: 0, current: -1 };
+    const before = this.srcMatches[this.srcCurrent]?.from ?? 0;
+    this.srcMatches = findInText(this.sourceEl.value, this.searchRe);
+    const i = this.srcMatches.findIndex((m) => m.to > before);
+    this.srcCurrent = this.srcMatches.length ? (i === -1 ? 0 : i) : -1;
+    return this.srcStatus();
+  }
+
+  /**
+   * Nästa (+1) eller föregående (-1) träff, eller visa aktuell (0). I Markdown-vyn
+   * markeras träffen i källtexten (som då får fokus); 0 gör där ingenting.
+   */
+  searchStep(dir: 1 | 0 | -1): SearchStatus {
+    if (this.mode === "write" && this.editor) {
+      const m = pmStep(this.editor.view, dir);
+      if (m) this.scrollToPos(m.from);
+      return pmStatus(this.editor.view);
+    }
+    const n = this.srcMatches.length;
+    if (!n || dir === 0) return this.srcStatus();
+    this.srcCurrent = (this.srcCurrent + dir + n) % n;
+    this.selectSource(this.srcMatches[this.srcCurrent]);
+    return this.srcStatus();
+  }
+
+  replaceCurrent(text: string): SearchStatus {
+    if (this.mode === "write" && this.editor) {
+      const next = pmReplace(this.editor.view, text);
+      if (next) this.scrollToPos(next.from);
+      return pmStatus(this.editor.view);
+    }
+    const m = this.srcMatches[this.srcCurrent];
+    if (!m) return this.srcStatus();
+    this.replaceSource(m.from, m.to, text);
+    this.srcMatches = findInText(this.sourceEl.value, this.searchRe);
+    const i = this.srcMatches.findIndex((r) => r.from >= m.from + text.length);
+    this.srcCurrent = this.srcMatches.length ? (i === -1 ? 0 : i) : -1;
+    if (this.srcCurrent >= 0) this.selectSource(this.srcMatches[this.srcCurrent]);
+    return this.srcStatus();
+  }
+
+  replaceAll(text: string): number {
+    if (this.mode === "write" && this.editor) return pmReplaceAll(this.editor.view, text);
+    const n = this.srcMatches.length;
+    if (!n || !this.searchRe) return 0;
+    this.searchRe.lastIndex = 0;
+    const value = this.sourceEl.value.replace(this.searchRe, () => text);
+    this.replaceSource(0, this.sourceEl.value.length, value);
+    this.applySearch();
+    return n;
+  }
+
+  /** Ersätter i källtexten så att webbläsarens Ångra fungerar. */
+  private replaceSource(from: number, to: number, text: string): void {
+    const ta = this.sourceEl;
+    ta.focus();
+    ta.setSelectionRange(from, to);
+    if (!document.execCommand("insertText", false, text)) {
+      ta.setRangeText(text, from, to, "end");
+      ta.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+  }
+
+  private selectSource(m: Range): void {
+    const ta = this.sourceEl;
+    ta.focus({ preventScroll: true });
+    ta.setSelectionRange(m.from, m.to);
+    // Textfältet är lika högt som texten, så sidan måste scrollas till träffen.
+    const top = ta.getBoundingClientRect().top + window.scrollY + caretOffset(ta, m.from);
+    window.scrollTo({ top: Math.max(0, top - window.innerHeight * 0.4) });
   }
 
   private mountWysiwyg(): void {
@@ -270,6 +389,7 @@ export class DocEditor {
         spellExtension(this.opts.spell),
         typographyExtension(this.opts.typography),
         WordHighlight,
+        SearchHighlight,
       ],
       content: splitFrontmatter(this.markdown).body,
       contentType: "markdown",
@@ -363,4 +483,30 @@ export function splitFrontmatter(md: string): { frontmatter: string; body: strin
   const m = FRONTMATTER_RE.exec(md);
   if (!m) return { frontmatter: "", body: md };
   return { frontmatter: m[0], body: md.slice(m[0].length) };
+}
+
+/** Höjd (px) från textfältets överkant till ett tecken, mätt med en osynlig kopia. */
+function caretOffset(ta: HTMLTextAreaElement, index: number): number {
+  const cs = getComputedStyle(ta);
+  const mirror = document.createElement("div");
+  for (const p of ["font", "letterSpacing", "lineHeight", "padding", "border", "boxSizing", "tabSize", "wordSpacing"] as const) {
+    mirror.style[p] = cs[p];
+  }
+  Object.assign(mirror.style, {
+    position: "absolute",
+    visibility: "hidden",
+    top: "0",
+    left: "-9999px",
+    width: `${ta.clientWidth}px`,
+    whiteSpace: "pre-wrap",
+    overflowWrap: "break-word",
+  });
+  mirror.textContent = ta.value.slice(0, index);
+  const marker = document.createElement("span");
+  marker.textContent = "\u200b";
+  mirror.append(marker);
+  document.body.append(mirror);
+  const top = marker.offsetTop;
+  mirror.remove();
+  return top;
 }

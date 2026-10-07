@@ -79,3 +79,54 @@ def test_chats_follow_rename_and_delete(client, tmp_path):
     client.delete("/api/documents/Ny")
     assert any(p.name.endswith("Ny.chats") for p in (tmp_path / ".trash").iterdir())
     assert not (tmp_path / ".chats" / "Ny").exists()
+
+
+def test_trash_list_and_restore(client, tmp_path):
+    client.post("/api/documents", json={"name": "Essä", "content": "# Essä\n\nEtt två tre.\n"})
+    client.post("/api/documents/Essä/history", json={"label": "v1"})
+    client.put("/api/documents/Essä/chats/c1", json={"messages": [{"role": "user", "content": "Hej"}]})
+    client.put("/api/documents/Essä/chats/c2", json={"messages": [{"role": "user", "content": "Andra"}]})
+    client.delete("/api/documents/Essä/chats/c2")
+    trash = client.get("/api/trash").json()
+    assert [t["kind"] for t in trash] == ["chat"] and trash[0]["title"] == "Andra"
+    # Ett samtal återställs till sitt dokument.
+    assert client.post(f"/api/trash/{trash[0]['id']}/restore").json() == {"kind": "chat", "name": "Essä", "id": "c2"}
+    assert {c["id"] for c in client.get("/api/documents/Essä/chats").json()} == {"c1", "c2"}
+
+    client.delete("/api/documents/Essä")
+    item = client.get("/api/trash").json()[0]
+    assert item["kind"] == "document" and item["name"] == "Essä" and item["history"] and item["chats"] == 2
+    # Ett nytt dokument med samma namn finns – det återställda får ett annat namn.
+    client.post("/api/documents", json={"name": "Essä"})
+    r = client.post(f"/api/trash/{item['id']}/restore").json()
+    assert r == {"kind": "document", "name": "Essä (återställd)"}
+    assert client.get("/api/documents/Essä (återställd)").json()["content"] == "# Essä\n\nEtt två tre.\n"
+    assert len(client.get("/api/documents/Essä (återställd)/history").json()) == 1
+    assert len(client.get("/api/documents/Essä (återställd)/chats").json()) == 2
+    assert client.get("/api/trash").json() == []
+
+
+def test_trash_errors(client, tmp_path):
+    assert client.post("/api/trash/finns-inte.md/restore").status_code == 404
+    assert client.post("/api/trash/..%2Fx/restore").status_code in (400, 404)
+    client.post("/api/documents", json={"name": "A"})
+    client.put("/api/documents/A/chats/c1", json={"messages": [{"role": "user", "content": "Hej"}]})
+    client.delete("/api/documents/A/chats/c1")
+    entry = client.get("/api/trash").json()[0]["id"]
+    client.delete("/api/documents/A")
+    r = client.post(f"/api/trash/{entry}/restore")
+    assert r.status_code == 400 and "Återställ dokumentet först" in r.json()["detail"]
+
+
+def test_backup_zip(client, tmp_path):
+    import io
+    import zipfile
+
+    client.post("/api/documents", json={"name": "Text", "content": "Hej"})
+    client.put("/api/settings", json={"theme": "dark"})
+    client.put("/api/documents/Text/chats/c1", json={"messages": [{"role": "user", "content": "Hej"}]})
+    r = client.get("/api/backup")
+    assert r.status_code == 200 and r.headers["content-type"] == "application/zip"
+    assert "word-work-" in r.headers["content-disposition"]
+    names = set(zipfile.ZipFile(io.BytesIO(r.content)).namelist())
+    assert {"Text.md", ".wordwork/settings.json", ".chats/Text/c1.json"} <= names
