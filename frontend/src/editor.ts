@@ -13,11 +13,11 @@
 import { Editor, Extension } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "@tiptap/markdown";
-import { Placeholder } from "@tiptap/extensions";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet, type EditorView } from "@tiptap/pm/view";
 import { TextSelection } from "@tiptap/pm/state";
 import { setHighlight, spellExtension, WordHighlight, type SpellService } from "./spell";
+import { typographyExtension, type TypographyOptions } from "./typography";
 
 export type ViewMode = "write" | "markdown";
 
@@ -44,10 +44,40 @@ const CurrentBlock = Extension.create({
   },
 });
 
+/**
+ * Platshållartext när dokumentet är tomt. (TipTaps Placeholder går igenom hela
+ * dokumentet vid varje tangenttryckning – märkbart i långa manus.)
+ */
+const EmptyPlaceholder = Extension.create({
+  name: "emptyPlaceholder",
+  addProseMirrorPlugins() {
+    return [
+      new Plugin({
+        key: new PluginKey("emptyPlaceholder"),
+        props: {
+          decorations(state) {
+            const { doc } = state;
+            const first = doc.firstChild;
+            if (doc.childCount !== 1 || !first || !first.isTextblock || first.content.size > 0) return null;
+            return DecorationSet.create(doc, [
+              Decoration.node(0, first.nodeSize, {
+                class: "is-editor-empty",
+                "data-placeholder": "Skriv här …",
+              }),
+            ]);
+          },
+        },
+      }),
+    ];
+  },
+});
+
 export interface EditorOptions {
   host: HTMLElement;
   spell: SpellService;
-  onChange: (markdown: string) => void;
+  typography: () => TypographyOptions;
+  /** Texten har ändrats. Markdown serialiseras först när den behövs (getMarkdown). */
+  onChange: () => void;
   onActivity: () => void;
   onSelection?: () => void;
   onContextMenu?: (event: MouseEvent, view: EditorView) => boolean;
@@ -159,14 +189,45 @@ export class DocEditor {
     return true;
   }
 
+  /**
+   * Scrollar till en position. Stycken utanför skärmen har bara uppskattad höjd
+   * (content-visibility), så vi scrollar först elementet in i bild och justerar
+   * sedan när det renderats.
+   */
   private scrollToPos(pos: number): void {
     if (!this.editor) return;
+    const view = this.editor.view;
     try {
-      const coords = this.editor.view.coordsAtPos(pos);
-      window.scrollBy({ top: coords.top - window.innerHeight * 0.4, behavior: "smooth" });
+      const { node } = view.domAtPos(pos);
+      const el = (node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as Element)) ?? null;
+      el?.scrollIntoView({ block: "center" });
+      let tries = 0;
+      const adjust = () => {
+        const coords = view.coordsAtPos(pos);
+        const delta = coords.top - window.innerHeight * 0.4;
+        if (Math.abs(delta) > 4) window.scrollBy({ top: delta });
+        if (++tries < 3 && Math.abs(delta) > 4) requestAnimationFrame(adjust);
+      };
+      requestAnimationFrame(adjust);
     } catch {
-      /* ignorera */
+      /* positionen kan saknas precis när editorn byggs om */
     }
+  }
+
+  /** Infogar text där markören står (i båda vyerna). */
+  insertText(text: string): void {
+    if (this.mode === "write" && this.editor) {
+      const view = this.editor.view;
+      view.dispatch(view.state.tr.insertText(text).scrollIntoView());
+      view.focus();
+      return;
+    }
+    const ta = this.sourceEl;
+    const start = ta.selectionStart ?? ta.value.length;
+    const end = ta.selectionEnd ?? start;
+    ta.focus();
+    ta.setRangeText(text, start, end, "end");
+    ta.dispatchEvent(new Event("input", { bubbles: true }));
   }
 
   /** Byter ut text i ett intervall (används av rättningar och synonymer). */
@@ -204,16 +265,23 @@ export class DocEditor {
           link: { openOnClick: false, autolink: true },
         }),
         Markdown.configure({ indentation: { style: "space", size: 2 } }),
-        Placeholder.configure({ placeholder: "Skriv här …" }),
+        EmptyPlaceholder,
         CurrentBlock,
         spellExtension(this.opts.spell),
+        typographyExtension(this.opts.typography),
         WordHighlight,
       ],
       content: splitFrontmatter(this.markdown).body,
       contentType: "markdown",
       editorProps: {
         // Egen stavningskontroll i Skriv-vyn; webbläsarens används i Markdown-vyn.
-        attributes: { class: "prose", "aria-label": "Text", spellcheck: "false", lang: "sv" },
+        // "long" slår på renderingsoptimering för långa manus (se .prose.long i CSS).
+        attributes: (state) => ({
+          class: state.doc.childCount > 300 ? "prose long" : "prose",
+          "aria-label": "Text",
+          spellcheck: "false",
+          lang: "sv",
+        }),
         handleDOMEvents: {
           contextmenu: (view, event) => {
             if (event.shiftKey || !this.opts.onContextMenu) return false;
@@ -240,7 +308,7 @@ export class DocEditor {
   private emitChange(): void {
     window.clearTimeout(this.changeTimer);
     this.changeTimer = window.setTimeout(() => {
-      this.opts.onChange(this.getMarkdown());
+      this.opts.onChange();
     }, 250);
   }
 
@@ -268,7 +336,10 @@ export class DocEditor {
 /** En enda avslutande radbrytning – stabila filer och diffar. */
 function normalize(md: string): string {
   // Tomma rader i slutet av ett citat ("> " utan text) är bara skräp från Enter.
-  const trimmed = md.replace(/\s+$/, "").replace(/(?:\n>[ \t]*)+$/, "").replace(/\s+$/, "");
+  // Tomma stycken skrivs av serialiseraren som "&nbsp;" – Markdown har inga tomma
+  // stycken, så de tas bort i stället för att hamna som skräp i filen.
+  const cleaned = md.replace(/^(?:&nbsp;|\u00a0)[ \t]*$/gm, "").replace(/\n{3,}/g, "\n\n");
+  const trimmed = cleaned.replace(/\s+$/, "").replace(/(?:\n>[ \t]*)+$/, "").replace(/\s+$/, "");
   return trimmed ? `${trimmed}\n` : "";
 }
 

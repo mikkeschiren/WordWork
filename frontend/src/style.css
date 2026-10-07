@@ -2,7 +2,7 @@
 :root {
   --bg: #fbfaf7;
   --text: #26241f;
-  --muted: #8b877d;
+  --muted: #706c63;
   --line: #e6e2d9;
   --panel: #ffffff;
   --accent: #9a5b2e;
@@ -24,7 +24,7 @@
 :root[data-theme="sepia"] {
   --bg: #f4ecdc;
   --text: #3a2f22;
-  --muted: #94846c;
+  --muted: #756650;
   --line: #e2d5bd;
   --panel: #faf4e8;
   --accent: #8c4f22;
@@ -34,7 +34,7 @@
 :root[data-theme="dark"] {
   --bg: #1b1b19;
   --text: #dcd7cd;
-  --muted: #858177;
+  --muted: #9a968c;
   --line: #34332f;
   --panel: #242422;
   --accent: #d79a62;
@@ -50,7 +50,7 @@
   :root:not([data-theme]) {
     --bg: #1b1b19;
     --text: #dcd7cd;
-    --muted: #858177;
+    --muted: #9a968c;
     --line: #34332f;
     --panel: #242422;
     --accent: #d79a62;
@@ -441,7 +441,7 @@ h2 {
   color: var(--muted);
 }
 
-/* ---------- Utseende-popover ---------- */
+/* ---------- Inställningar (popover) ---------- */
 .popover {
   position: fixed;
   top: 50px;
@@ -589,6 +589,10 @@ dialog.modal .spacer {
 
 .banner[hidden] {
   display: none;
+}
+
+.banner.update {
+  border-color: var(--accent);
 }
 
 #toast {
@@ -1100,6 +1104,18 @@ dialog.modal .dict-add input[type="text"] {
   font-size: 12.5px;
 }
 
+.ai-history {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ai-history-select {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+}
+
 .ai-messages {
   flex: 1;
   min-height: 120px;
@@ -1278,4 +1294,207 @@ dialog.modal:has(.dict-modal) {
   font-size: 13px;
   line-height: 1.5;
   resize: vertical;
+}
+
+/*
+ * Långa manus: låt webbläsaren hoppa över layout av stycken utanför skärmen.
+ * Bara i långa dokument och aldrig för stycket man skriver i – annars kan
+ * markören hamna fel vid snabbt skrivande i nyss skapade stycken.
+ */
+.prose.long > p:not(.is-current),
+.prose.long > blockquote:not(.is-current),
+.prose.long > ul:not(.is-current),
+.prose.long > ol:not(.is-current) {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 4lh;
+}
+
+/* ---------- Skrivmål, kortkommandon ---------- */
+.status-goal {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.goal-bar {
+  display: inline-block;
+  width: 48px;
+  height: 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+  overflow: hidden;
+}
+
+.goal-bar i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.status-goal.done {
+  color: var(--accent);
+}
+
+.popover .links {
+  display: flex;
+  gap: 16px;
+}
+
+.popover .version {
+  margin: 0;
+  text-align: right;
+}
+
+.shortcuts table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 8px;
+}
+
+.shortcuts td {
+  padding: 6px 4px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+.shortcuts td:first-child {
+  white-space: nowrap;
+  width: 1%;
+  padding-right: 16px;
+}
+
+kbd {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--bg);
+}
+
+/* ---------- Infoga tecken ---------- */
+.popover.chars {
+  width: 410px;
+  right: 120px;
+  gap: 8px;
+  max-height: calc(100vh - 70px);
+  overflow-y: auto;
+}
+
+.popover.chars input[type="search"] {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+}
+
+.chars .grp {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 8px 0 4px;
+}
+
+.chars .grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 4px;
+}
+
+.chars .k {
+  position: relative;
+  display: grid;
+  place-items: center;
+  height: 38px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--doc-font);
+  font-size: 19px;
+}
+
+.chars .k small {
+  position: absolute;
+  bottom: 1px;
+  font-family: var(--ui-font);
+  font-size: 8px;
+  color: var(--muted);
+}
+
+.chars .k.sel,
+.chars .k:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
+  outline: none;
+}
+
+.chars-info {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.chars-info b {
+  color: var(--text);
+  font-family: var(--doc-font);
+  font-size: 15px;
+}
+
+.chars-footer {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.popover .popover-sub {
+  margin: 6px 0 -4px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+dialog.modal:has(.typo-modal) {
+  width: min(760px, 94vw);
+}
+
+.typo-changes {
+  max-height: 55vh;
+  overflow-y: auto;
+  margin: 12px 0;
+  padding: 0 0 0 0;
+  list-style: none;
+}
+
+.typo-changes li {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.typo-diff {
+  font-family: var(--doc-font);
+  font-size: 15px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.typo-diff ins {
+  background: var(--ins);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.typo-diff del {
+  background: var(--del);
 }

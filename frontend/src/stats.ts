@@ -77,18 +77,70 @@ export function splitSentences(text: string): string[] {
 }
 
 function words(text: string): string[] {
-  return (text.match(WORD_RE) ?? []).filter((w) => /\p{L}/u.test(w));
+  // Ord som börjar med en bokstav behöver ingen regex-kontroll (de flesta).
+  return (text.match(WORD_RE) ?? []).filter((w) => {
+    const c = w.charCodeAt(0);
+    return c > 57 || c < 48 ? true : /\p{L}/u.test(w);
+  });
+}
+
+/** Bokstäver i ordet (bindestreck och apostrofer räknas inte). */
+function letterCount(w: string): number {
+  if (w.indexOf("-") < 0 && w.indexOf("'") < 0 && w.indexOf("’") < 0) return w.length;
+  return w.replace(/[-'’]/g, "").length;
+}
+
+const collator = new Intl.Collator("sv");
+
+export interface QuickStats {
+  words: number;
+  chars: number;
+  lix: number | null;
+}
+
+/**
+ * Snabb statistik för statusraden – ingen ordfrekvens eller meningslista.
+ * Räknar på samma sätt som analyze(), så LIX blir identiskt.
+ */
+export function quickStats(text: string): QuickStats {
+  const ws = words(text);
+  const n = ws.length;
+  let long = 0;
+  for (const w of ws) if (w.length > 6 && letterCount(w) > 6) long++;
+  const sentenceCount = Math.max(countSentences(text), n ? 1 : 0);
+  return {
+    words: n,
+    chars: text.replace(/\n/g, "").length,
+    lix: n && sentenceCount ? n / sentenceCount + (long * 100) / n : null,
+  };
+}
+
+/** Antal meningar enligt samma regler som splitSentences(), utan att bygga listan. */
+export function countSentences(text: string): number {
+  let count = 0;
+  for (const para of text.split(/\n\s*\n/)) {
+    const masked = para.replace(ABBREVIATIONS, (m) => m.replace(/\./g, "\u0000"));
+    for (const raw of masked.split(/(?<=[.!?:…]["”’»)]*)\s+/u)) {
+      if (/[\p{L}\p{N}]/u.test(raw)) count++;
+    }
+  }
+  return count;
 }
 
 export function analyze(text: string, opts: { includeStopwords?: boolean; top?: number } = {}): TextStats {
   const ws = words(text);
   const n = ws.length;
-  const lower = ws.map((w) => w.toLocaleLowerCase("sv"));
+  const lower = ws.map((w) => w.toLowerCase());
   const unique = new Set(lower);
   const sentences = splitSentences(text);
   const sentenceCount = Math.max(sentences.length, n ? 1 : 0);
-  const longWords = ws.filter((w) => [...w.replace(/[-'’]/g, "")].length > 6).length;
-  const letters = ws.reduce((sum, w) => sum + [...w].length, 0);
+  let longWords = 0;
+  let letters = 0;
+  for (const w of ws) {
+    const l = letterCount(w);
+    letters += l;
+    if (l > 6) longWords++;
+  }
 
   const lix = n && sentenceCount ? n / sentenceCount + (longWords * 100) / n : null;
   let ovix: number | null = null;
@@ -96,18 +148,22 @@ export function analyze(text: string, opts: { includeStopwords?: boolean; top?: 
     ovix = Math.log(n) / Math.log(2 - Math.log(unique.size) / Math.log(n));
   }
 
-  const counts = new Map<string, number>();
-  for (const w of lower) {
-    if (!opts.includeStopwords && STOPWORDS.has(w)) continue;
-    counts.set(w, (counts.get(w) ?? 0) + 1);
+  const top = opts.top ?? 40;
+  let frequency: { word: string; count: number }[] = [];
+  if (top > 0) {
+    const counts = new Map<string, number>();
+    for (const w of lower) {
+      if (!opts.includeStopwords && STOPWORDS.has(w)) continue;
+      counts.set(w, (counts.get(w) ?? 0) + 1);
+    }
+    frequency = [...counts.entries()]
+      .map(([word, count]) => ({ word, count }))
+      .sort((a, b) => b.count - a.count || collator.compare(a.word, b.word))
+      .slice(0, top);
   }
-  const frequency = [...counts.entries()]
-    .map(([word, count]) => ({ word, count }))
-    .sort((a, b) => b.count - a.count || a.word.localeCompare(b.word, "sv"))
-    .slice(0, opts.top ?? 40);
 
   const longestSentences = sentences
-    .map((s) => ({ text: s, words: words(s).length }))
+    .map((s) => ({ text: s, words: (s.match(WORD_RE) ?? []).length }))
     .sort((a, b) => b.words - a.words)
     .slice(0, 5)
     .filter((s) => s.words > 0);

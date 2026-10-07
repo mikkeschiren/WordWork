@@ -278,7 +278,7 @@ export function spellExtension(service: SpellService) {
             unsubscribe = service.onUpdate(() => refresh(view));
             return {
               update(v, prev) {
-                if (v.state.doc.eq(prev.doc)) return;
+                if (v.state.doc === prev.doc) return;
                 window.clearTimeout(timer);
                 timer = window.setTimeout(() => refresh(v), 400);
               },

@@ -4,11 +4,13 @@
  * Det finns medvetet ingen "infoga"- eller "ersätt"-knapp: svaren visas bara här.
  * Citat i svaren som finns i texten blir klickbara och markerar stället i
  * texten, så att författaren själv kan ändra.
+ *
+ * Samtalen sparas per dokument i datamappen (.chats/<dokument>/<id>.json).
  */
 import DOMPurify from "dompurify";
 import { marked } from "marked";
-import { api, type AIEvent, type AIModel, type AIStatus } from "./api";
-import { h, modKey, toast } from "./ui";
+import { api, type AIEvent, type AIModel, type AIStatus, type ChatSummary, type StoredMessage } from "./api";
+import { confirm, formatDate, h, modKey, toast } from "./ui";
 
 interface Message {
   role: "user" | "assistant";
@@ -21,6 +23,26 @@ interface Message {
   showThinking?: boolean;
 }
 
+interface Conversation {
+  id: string;
+  messages: Message[];
+}
+
+export interface AIPrefs {
+  aiModel: string;
+  aiThink: boolean;
+}
+
+function newId(): string {
+  const rand = Math.random().toString(36).slice(2, 8);
+  return `${new Date().toISOString().replace(/[:.]/g, "-")}-${rand}`;
+}
+
+function toStored(m: Message): StoredMessage {
+  const { role, content, label, thinking, meta, error } = m;
+  return { role, content, label, thinking, meta, error };
+}
+
 export interface AIPanelDeps {
   drawer: HTMLElement;
   closeButton: () => HTMLElement;
@@ -30,6 +52,8 @@ export interface AIPanelDeps {
   selectionText: () => string;
   showInText: (phrase: string) => boolean;
   flush: () => Promise<void>;
+  prefs: () => AIPrefs;
+  savePrefs: (patch: Partial<AIPrefs>) => void;
 }
 
 export const QUICK_LABELS: Record<string, string> = {
@@ -39,25 +63,6 @@ export const QUICK_LABELS: Record<string, string> = {
   structure: "Struktur och dramaturgi",
   facts: "Fakta att kontrollera",
 };
-
-const MODEL_KEY = "ww.aiModel";
-const THINK_KEY = "ww.aiThink";
-
-function stored(key: string): string | null {
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-function store(key: string, value: string): void {
-  try {
-    localStorage.setItem(key, value);
-  } catch {
-    /* ignorera */
-  }
-}
 
 marked.use({ gfm: true, breaks: false });
 
@@ -79,9 +84,13 @@ export class AIPanel {
   private status: AIStatus | null = null;
   private models: AIModel[] = [];
   private modelError = "";
-  private model = stored(MODEL_KEY) ?? "";
-  private think = stored(THINK_KEY) !== "false";
-  private conversations = new Map<string, Message[]>();
+  private model = "";
+  /** Aktuellt samtal per dokument. */
+  private conversations = new Map<string, Conversation>();
+  /** Sparade samtal per dokument, senast ändrade först. */
+  private summaries = new Map<string, ChatSummary[]>();
+  private historySelect = h("select", { class: "ai-history-select", "aria-label": "Samtal" }) as HTMLSelectElement;
+  private deleteBtn = h("button", { class: "link", title: "Flytta samtalet till papperskorgen" }, "Ta bort");
   private controller: AbortController | null = null;
   private list = h("div", { class: "ai-messages", "aria-live": "polite" });
   private scope = h("span", { class: "scope" });
@@ -96,6 +105,8 @@ export class AIPanel {
   private citeSelection = "";
 
   constructor(private deps: AIPanelDeps) {
+    this.historySelect.addEventListener("change", () => void this.switchTo(this.historySelect.value));
+    this.deleteBtn.addEventListener("click", () => void this.deleteCurrent());
     this.input.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
         e.preventDefault();
@@ -115,7 +126,7 @@ export class AIPanel {
       this.status = { enabled: false };
     }
     if (!this.status.enabled) return false;
-    if (!this.model) this.model = this.status.default_model ?? "";
+    if (!this.model) this.model = this.deps.prefs().aiModel || this.status.default_model || "";
     return true;
   }
 
@@ -147,14 +158,134 @@ export class AIPanel {
     window.addEventListener("focus", () => void check());
   }
 
-  private get messages(): Message[] {
+  private get think(): boolean {
+    return this.deps.prefs().aiThink;
+  }
+
+  private get conversation(): Conversation {
     const key = this.deps.documentName() ?? "";
-    let m = this.conversations.get(key);
-    if (!m) {
-      m = [];
-      this.conversations.set(key, m);
+    let c = this.conversations.get(key);
+    if (!c) {
+      c = { id: newId(), messages: [] };
+      this.conversations.set(key, c);
     }
-    return m;
+    return c;
+  }
+
+  private get messages(): Message[] {
+    return this.conversation.messages;
+  }
+
+  /** Hämtar dokumentets sparade samtal och öppnar det senaste (en gång per dokument). */
+  private async loadConversations(doc: string): Promise<void> {
+    if (!doc || this.conversations.has(doc)) return;
+    let list: ChatSummary[] = [];
+    try {
+      list = await api.chats(doc);
+    } catch {
+      /* dokumentet kan ha tagits bort – börja med ett tomt samtal */
+    }
+    if (this.conversations.has(doc)) return; // hann laddas under tiden
+    this.summaries.set(doc, list);
+    let conv: Conversation = { id: newId(), messages: [] };
+    if (list[0]) {
+      try {
+        const chat = await api.chat(doc, list[0].id);
+        conv = { id: chat.id, messages: chat.messages.map((m) => ({ ...m, content: m.content ?? "" })) };
+      } catch {
+        /* öppna ett nytt samtal i stället */
+      }
+    }
+    if (!this.conversations.has(doc)) this.conversations.set(doc, conv);
+  }
+
+  /** Sparar samtalet (pågående svar sparas när de är klara). */
+  private async persist(conv: Conversation): Promise<void> {
+    const doc = [...this.conversations].find(([, c]) => c === conv)?.[0];
+    const messages = conv.messages.filter((m) => !m.pending).map(toStored);
+    if (!doc || !messages.length) return;
+    try {
+      const summary = await api.saveChat(doc, conv.id, this.model, messages);
+      const list = (this.summaries.get(doc) ?? []).filter((c) => c.id !== summary.id);
+      this.summaries.set(doc, [summary, ...list]);
+      if (doc === this.deps.documentName()) this.renderHistory();
+    } catch (e) {
+      toast(`AI-samtalet kunde inte sparas: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  /** Väljaren för tidigare samtal. */
+  private renderHistory(): void {
+    const doc = this.deps.documentName() ?? "";
+    const list = this.summaries.get(doc) ?? [];
+    const current = this.conversation;
+    const saved = list.some((c) => c.id === current.id);
+    const options: HTMLOptionElement[] = [];
+    if (!saved) options.push(h("option", { value: current.id, selected: true }, "Nytt samtal") as HTMLOptionElement);
+    for (const c of list) {
+      options.push(
+        h(
+          "option",
+          { value: c.id, selected: c.id === current.id },
+          `${c.title} · ${formatDate(new Date(c.updated))}`,
+        ) as HTMLOptionElement,
+      );
+    }
+    this.historySelect.replaceChildren(...options);
+    this.historySelect.disabled = !!this.controller || options.length < 2;
+    this.historySelect.title = list.length ? `${list.length} sparade samtal om texten` : "Inga sparade samtal än";
+    this.deleteBtn.hidden = !saved;
+    this.deleteBtn.toggleAttribute("disabled", !!this.controller);
+  }
+
+  private async switchTo(id: string): Promise<void> {
+    const doc = this.deps.documentName();
+    if (!doc || this.controller || id === this.conversation.id) return;
+    try {
+      const chat = await api.chat(doc, id);
+      this.conversations.set(doc, { id: chat.id, messages: chat.messages.map((m) => ({ ...m, content: m.content ?? "" })) });
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e));
+    }
+    this.renderHistory();
+    this.renderMessages();
+  }
+
+  private async deleteCurrent(): Promise<void> {
+    const doc = this.deps.documentName();
+    if (!doc || this.controller) return;
+    const conv = this.conversation;
+    const ok = await confirm(
+      "Ta bort samtalet",
+      "Samtalet flyttas till papperskorgen i datamappen (.trash) och kan återskapas därifrån.",
+      "Ta bort",
+      true,
+    );
+    if (!ok) return;
+    try {
+      await api.removeChat(doc, conv.id);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e));
+      return;
+    }
+    const rest = (this.summaries.get(doc) ?? []).filter((c) => c.id !== conv.id);
+    this.summaries.set(doc, rest);
+    this.conversations.set(doc, { id: newId(), messages: [] });
+    if (rest[0]) await this.switchTo(rest[0].id);
+    else {
+      this.renderHistory();
+      this.renderMessages();
+    }
+  }
+
+  /** Dokumentet har bytt namn – samtalen följer med (servern flyttar filerna). */
+  renamed(oldName: string, newName: string): void {
+    for (const map of [this.conversations, this.summaries] as Map<string, unknown>[]) {
+      if (map.has(oldName)) {
+        map.set(newName, map.get(oldName));
+        map.delete(oldName);
+      }
+    }
   }
 
   private async loadModels(): Promise<void> {
@@ -181,13 +312,13 @@ export class AIPanel {
       h("p", { class: "meta" }, "Laddar modeller …"),
     );
     this.updateScope();
-    if (!this.models.length) await this.loadModels();
+    await Promise.all([this.models.length ? null : this.loadModels(), this.loadConversations(this.deps.documentName() ?? "")]);
 
     const modelSelect = h("select", {
       "aria-label": "Modell",
       onchange: (e: Event) => {
         this.model = (e.target as HTMLSelectElement).value;
-        store(MODEL_KEY, this.model);
+        this.deps.savePrefs({ aiModel: this.model });
       },
     });
     for (const m of this.models) {
@@ -199,8 +330,7 @@ export class AIPanel {
       type: "checkbox",
       checked: this.think,
       onchange: (e: Event) => {
-        this.think = (e.target as HTMLInputElement).checked;
-        store(THINK_KEY, String(this.think));
+        this.deps.savePrefs({ aiThink: (e.target as HTMLInputElement).checked });
       },
     });
 
@@ -237,6 +367,7 @@ export class AIPanel {
             ),
           ),
       quick,
+      h("div", { class: "ai-history" }, this.historySelect, this.deleteBtn),
       this.list,
       h(
         "div",
@@ -245,12 +376,17 @@ export class AIPanel {
         h(
           "div",
           { class: "ai-actions" },
-          h("button", { class: "link", onclick: () => this.clear() }, "Rensa samtalet"),
+          h(
+            "button",
+            { class: "link", onclick: () => this.newConversation(), title: "Det här samtalet finns kvar under Tidigare samtal" },
+            "Nytt samtal",
+          ),
           h("span", { class: "meta" }, "Enter skickar · Shift+Enter ny rad"),
           this.sendBtn,
         ),
       ),
     );
+    this.renderHistory();
     this.renderMessages();
   }
 
@@ -272,10 +408,12 @@ export class AIPanel {
     this.scope.title = n >= 3 ? "Frågan gäller i första hand det markerade avsnittet" : "Frågan gäller hela texten";
   }
 
-  private clear(): void {
-    this.stop();
-    this.messages.length = 0;
+  private newConversation(): void {
+    if (this.controller || !this.messages.length) return;
+    this.conversations.set(this.deps.documentName() ?? "", { id: newId(), messages: [] });
+    this.renderHistory();
     this.renderMessages();
+    this.input.focus();
   }
 
   private stop(): void {
@@ -287,7 +425,7 @@ export class AIPanel {
   /** Avbryt pågående svar (t.ex. vid byte av dokument). */
   reset(): void {
     this.stop();
-    if (this.deps.drawer.classList.contains("open")) this.renderMessages();
+    if (this.deps.drawer.classList.contains("open")) void this.render();
   }
 
   async ask(prompt: string, quick?: string): Promise<void> {
@@ -299,8 +437,10 @@ export class AIPanel {
       return;
     }
     await this.deps.flush();
+    await this.loadConversations(this.deps.documentName() ?? "");
     const selection = this.scopedSelection();
-    const msgs = this.messages;
+    const conv = this.conversation;
+    const msgs = conv.messages;
     const history = msgs
       .filter((m) => !m.error && !m.pending && m.content)
       .map((m) => ({ role: m.role, content: m.content }));
@@ -319,6 +459,8 @@ export class AIPanel {
     const ticker = window.setInterval(() => this.scheduleRender(), 1000);
     this.controller = new AbortController();
     this.sendBtn.textContent = "Stoppa";
+    this.renderHistory();
+    void this.persist(conv);
     try {
       await api.aiChat(
         {
@@ -357,6 +499,8 @@ export class AIPanel {
       this.controller = null;
       this.sendBtn.textContent = "Fråga";
       this.renderMessages();
+      this.renderHistory();
+      await this.persist(conv);
     }
   }
 

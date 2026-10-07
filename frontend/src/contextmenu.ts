@@ -11,6 +11,7 @@ import { h, toast } from "./ui";
 interface MenuDeps {
   spell: SpellService;
   replace: (from: number, to: number, text: string) => void;
+  openChars: () => void;
 }
 
 let current: HTMLElement | null = null;
@@ -42,7 +43,17 @@ export function openContextMenu(event: MouseEvent, view: EditorView, deps: MenuD
   const hit = view.posAtCoords({ left: event.clientX, top: event.clientY });
   if (!hit) return false;
   const range = wordAt(view.state, hit.pos);
-  if (!range) return false;
+  if (!range) {
+    // Inget ord under markören: visa bara "Infoga tecken".
+    view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, hit.pos)));
+    closeMenu();
+    const menu = h("div", { class: "context-menu", role: "menu" });
+    current = menu;
+    menu.append(charsItem(deps, view, hit.pos));
+    document.body.append(menu);
+    position(menu, event.clientX, event.clientY);
+    return true;
+  }
 
   const phrase = phraseCandidate(view, hit.pos, range, deps.spell);
   // Markera ordet så det syns vad menyn gäller – men behåll en egen markering
@@ -66,6 +77,7 @@ export function openContextMenu(event: MouseEvent, view: EditorView, deps: MenuD
   const misspelled = deps.spell.isMisspelled(range.word);
   if (misspelled) buildSpelling(menu, range, deps, choose);
   buildSynonyms(menu, range, choose);
+  menu.append(h("hr", {}), charsItem(deps, view, hit.pos));
 
   document.body.append(menu);
   position(menu, event.clientX, event.clientY);
@@ -124,6 +136,16 @@ function buildPhrase(menu: HTMLElement, phrase: string, deps: MenuDeps): void {
     }),
     h("hr", {}),
   );
+}
+
+/** "Infoga tecken …" – tecknet ska hamna där man högerklickade, inte ersätta ordet. */
+function charsItem(deps: MenuDeps, view: EditorView, pos: number): HTMLButtonElement {
+  return item("Infoga tecken …", () => {
+    closeMenu();
+    const p = Math.min(pos, view.state.doc.content.size);
+    view.dispatch(view.state.tr.setSelection(TextSelection.near(view.state.doc.resolve(p))));
+    deps.openChars();
+  });
 }
 
 function item(label: string, onclick: () => void, cls = ""): HTMLButtonElement {

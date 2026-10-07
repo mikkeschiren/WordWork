@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import asdict
 from urllib.parse import quote
 
@@ -12,11 +13,12 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from . import __version__
 from .ai import QUICK_PROMPTS, AIError, OllamaClient, build_messages, context_size, is_external
 from .config import Settings
 from .convert import EXPORT_FORMATS, MAX_IMPORT_BYTES, TEMPLATE_LABELS, ConvertError, export_document, import_file
 from .language import Language, normalize_entry
-from .storage import Storage, StorageError, safe_name
+from .storage import SettingsStore, Storage, StorageError, delete_chat, list_chats, read_chat, safe_name, save_chat
 
 
 class CreateDoc(BaseModel):
@@ -57,6 +59,11 @@ class ChatRequest(BaseModel):
     history: list[ChatMessage] = Field(default_factory=list, max_length=100)
 
 
+class SaveChat(BaseModel):
+    model: str = Field(default="", max_length=200)
+    messages: list[dict] = Field(default_factory=list)
+
+
 class DictionaryWord(BaseModel):
     word: str = Field(min_length=1, max_length=200)
 
@@ -65,10 +72,74 @@ class DictionaryAll(BaseModel):
     words: list[str] = Field(max_length=20_000)
 
 
+log = logging.getLogger("wordwork")
+
+# Sidan laddar bara egna filer; inline-stilar används för t.ex. stapeldiagram.
+CSP = (
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; font-src 'self' data:; connect-src 'self'; "
+    "frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+)
+
+
+def data_dir_problem(path) -> str | None:
+    """Kontrollerar att datamappen går att skriva i (vanligt fel: rättigheter på värden)."""
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe = path / ".wordwork" / ".skrivtest"
+        probe.parent.mkdir(exist_ok=True)
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink()
+        return None
+    except OSError as exc:
+        return (
+            f"Kan inte skriva i datamappen {path} ({exc.strerror or exc}). "
+            "Kontrollera rättigheterna på mappen på din dator, t.ex. med `chmod 755 data`."
+        )
+
+
+def _host_only(host: str) -> str:
+    host = host.strip().lower()
+    if host.startswith("["):
+        return host[1 : host.find("]")] if "]" in host else host
+    return host.rsplit(":", 1)[0] if host.count(":") == 1 else host
+
+
 def create_app(settings: Settings | None = None, ai_transport: httpx.AsyncBaseTransport | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
+    problem = data_dir_problem(settings.data_dir)
+    if problem:
+        log.error(problem)
     storage = Storage(settings.data_dir, settings.snapshot_minutes)
-    app = FastAPI(title="Word Work", docs_url="/api/docs", openapi_url="/api/openapi.json")
+    user_settings = SettingsStore(settings.data_dir)
+    app = FastAPI(title="Word Work", version=__version__, docs_url="/api/docs", openapi_url="/api/openapi.json")
+
+    allowed = set(settings.allowed_hosts)
+
+    @app.middleware("http")
+    async def security(request: Request, call_next):
+        # Skydd mot DNS-rebinding: en främmande webbplats som pekar sitt domännamn
+        # mot 127.0.0.1 ska inte kunna läsa texterna via användarens webbläsare.
+        if "*" not in allowed and _host_only(request.headers.get("host", "")) not in allowed:
+            return JSONResponse(
+                {"detail": "Okänt värdnamn. Lägg till det i WW_ALLOWED_HOSTS om du vill nå Word Work så."},
+                status_code=400,
+            )
+        response = await call_next(request)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        if not request.url.path.startswith("/api/docs"):
+            response.headers.setdefault("Content-Security-Policy", CSP)
+        return response
+
+    @app.exception_handler(PermissionError)
+    async def permission_error(_: Request, exc: PermissionError) -> JSONResponse:
+        log.error("Rättighetsfel: %s", exc)
+        return JSONResponse(
+            {"detail": data_dir_problem(settings.data_dir) or f"Rättighetsfel: {exc.strerror or exc}"},
+            status_code=500,
+        )
     app.state.storage = storage
     language = Language(settings.resources_dir, settings.data_dir / ".wordwork" / "ordlista.txt")
     app.state.language = language
@@ -93,7 +164,14 @@ def create_app(settings: Settings | None = None, ai_transport: httpx.AsyncBaseTr
 
     @app.get("/api/health")
     def health() -> dict:
-        return {"status": "ok", "ai": ollama is not None, "language": language.ready}
+        problem = data_dir_problem(settings.data_dir)
+        return {
+            "status": "error" if problem else "ok",
+            "version": __version__,
+            "problem": problem,
+            "ai": ollama is not None,
+            "language": language.ready,
+        }
 
     # ---------- AI (Ollama) ----------
     @app.get("/api/ai/status")
@@ -227,6 +305,33 @@ def create_app(settings: Settings | None = None, ai_transport: httpx.AsyncBaseTr
     def delete_doc(name: str) -> None:
         storage.delete(name)
 
+    # ---------- inställningar ----------
+    @app.get("/api/settings")
+    def get_settings() -> dict:
+        data = user_settings.read()
+        return {"saved": data is not None, "settings": data or {}}
+
+    @app.put("/api/settings")
+    def put_settings(body: dict) -> dict:
+        return {"settings": user_settings.write(body)}
+
+    # ---------- AI-samtal ----------
+    @app.get("/api/documents/{name}/chats")
+    def get_chats(name: str) -> list[dict]:
+        return list_chats(storage, name)
+
+    @app.get("/api/documents/{name}/chats/{cid}")
+    def get_chat(name: str, cid: str) -> dict:
+        return read_chat(storage, name, cid)
+
+    @app.put("/api/documents/{name}/chats/{cid}")
+    def put_chat(name: str, cid: str, body: SaveChat) -> dict:
+        return save_chat(storage, name, cid, body.messages, body.model)
+
+    @app.delete("/api/documents/{name}/chats/{cid}", status_code=204)
+    def remove_chat(name: str, cid: str) -> None:
+        delete_chat(storage, name, cid)
+
     # ---------- import & export ----------
     @app.get("/api/export/formats")
     def export_formats() -> dict:
@@ -291,7 +396,9 @@ def create_app(settings: Settings | None = None, ai_transport: httpx.AsyncBaseTr
             candidate = (static_dir / path).resolve()
             if path and candidate.is_file() and static_dir in candidate.parents:
                 return FileResponse(candidate)
-            return FileResponse(static_dir / "index.html")
+            # index.html pekar på filer med hash i namnet. Den får inte cachas, annars
+            # kan webbläsaren köra en gammal version efter en uppdatering.
+            return FileResponse(static_dir / "index.html", headers={"Cache-Control": "no-cache"})
 
     return app
 

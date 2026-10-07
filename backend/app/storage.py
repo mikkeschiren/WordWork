@@ -6,6 +6,10 @@ Struktur i datakatalogen:
     <data>/.history/<namn>/index.json    metadata för versioner
     <data>/.history/<namn>/<vid>.md      ögonblicksbilder
     <data>/.trash/<tid>-<namn>.md        borttagna dokument (raderas aldrig på riktigt)
+    <data>/.chats/<namn>/<id>.json       AI-samtal om dokumentet
+    <data>/.wordwork/settings.json       inställningar
+
+Samtalen följer dokumentet vid namnbyte och hamnar i papperskorgen med det.
 """
 
 from __future__ import annotations
@@ -36,6 +40,14 @@ class NotFound(StorageError):
 
 class Conflict(StorageError):
     status = 409
+
+
+SETTINGS_FILE = ".wordwork/settings.json"
+MAX_SETTINGS_BYTES = 64_000
+MAX_CHAT_BYTES = 4_000_000
+MAX_CHAT_MESSAGES = 400
+_CHAT_ID = re.compile(r"^[0-9A-Za-z_-]{1,64}$")
+_MESSAGE_FIELDS = ("content", "label", "thinking", "meta", "error")
 
 
 # YAML-frontmatter i början av filen (samma regel som i frontend och Pandoc).
@@ -111,7 +123,10 @@ class Storage:
     def __init__(self, root: Path, snapshot_minutes: float = 5.0) -> None:
         self.root = root
         self.snapshot_minutes = snapshot_minutes
-        self.root.mkdir(parents=True, exist_ok=True)
+        try:
+            self.root.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass  # rapporteras via /api/health – appen ska ändå starta
         self._lock = threading.RLock()
 
     # ---------- sökvägar ----------
@@ -124,6 +139,14 @@ class Storage:
 
     def _hist_dir(self, name: str) -> Path:
         return self.root / ".history" / validate_name(name)
+
+    def _chat_dir(self, name: str) -> Path:
+        return self.root / ".chats" / validate_name(name)
+
+    def _chat_path(self, name: str, cid: str) -> Path:
+        if not _CHAT_ID.match(cid):
+            raise StorageError("Ogiltigt samtals-id.")
+        return self._chat_dir(name) / f"{cid}.json"
 
     def _require(self, name: str) -> Path:
         path = self._doc_path(name)
@@ -201,14 +224,15 @@ class Storage:
                 raise Conflict(f"Det finns redan ett dokument som heter ”{new}”.")
             os.replace(src, dst)
             old_hist, new_hist = self._hist_dir(old), self._hist_dir(new)
-            if old_hist.exists():
-                new_hist.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(old_hist), str(new_hist))
+            for old_dir, new_dir in ((old_hist, new_hist), (self._chat_dir(old), self._chat_dir(new))):
+                if old_dir.exists():
+                    new_dir.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(old_dir), str(new_dir))
             text = dst.read_text(encoding="utf-8")
             return DocumentInfo(new, new, dst.stat().st_mtime, count_words(text))
 
     def delete(self, name: str) -> None:
-        """Flyttar dokumentet (och dess historik) till papperskorgen."""
+        """Flyttar dokumentet (och dess historik och AI-samtal) till papperskorgen."""
         with self._lock:
             src = self._require(name)
             stamp = _now().strftime("%Y%m%dT%H%M%S")
@@ -218,6 +242,9 @@ class Storage:
             hist = self._hist_dir(name)
             if hist.exists():
                 shutil.move(str(hist), str(trash / f"{stamp}-{name}.history"))
+            chats = self._chat_dir(name)
+            if chats.exists():
+                shutil.move(str(chats), str(trash / f"{stamp}-{name}.chats"))
 
     # ---------- historik ----------
     def _load_index(self, name: str) -> list[Version]:
@@ -288,3 +315,128 @@ class Storage:
             _atomic_write(path, content)
             self.snapshot(name, kind="restore")
             return path.stat().st_mtime
+
+
+# ---------- inställningar ----------
+def _check_json_size(data: object, limit: int, what: str) -> str:
+    text = json.dumps(data, ensure_ascii=False, indent=1)
+    if len(text.encode("utf-8")) > limit:
+        raise StorageError(f"{what} är för stort (max {limit // 1000} kB).")
+    return text
+
+
+class SettingsStore:
+    """Inställningar som ett JSON-objekt. Frontend äger formatet; servern sparar bara."""
+
+    def __init__(self, root: Path) -> None:
+        self.path = root / SETTINGS_FILE
+        self._lock = threading.Lock()
+
+    def read(self) -> dict | None:
+        """None om inga inställningar har sparats än."""
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError):
+            return {}  # trasig fil: börja om med standardvärden i stället för att krascha
+        return data if isinstance(data, dict) else {}
+
+    def write(self, data: dict) -> dict:
+        if not isinstance(data, dict):
+            raise StorageError("Inställningarna måste vara ett objekt.")
+        text = _check_json_size(data, MAX_SETTINGS_BYTES, "Inställningarna")
+        with self._lock:
+            _atomic_write(self.path, text + "\n")
+        return data
+
+
+# ---------- AI-samtal ----------
+def _clean_messages(messages: object) -> list[dict]:
+    if not isinstance(messages, list):
+        raise StorageError("Meddelandena måste vara en lista.")
+    if len(messages) > MAX_CHAT_MESSAGES:
+        raise StorageError(f"Samtalet har för många meddelanden (max {MAX_CHAT_MESSAGES}).")
+    out = []
+    for m in messages:
+        if not isinstance(m, dict) or m.get("role") not in ("user", "assistant"):
+            raise StorageError("Ogiltigt meddelande.")
+        clean = {"role": m["role"]}
+        for key in _MESSAGE_FIELDS:
+            value = m.get(key)
+            if isinstance(value, str) and value:
+                clean[key] = value
+        out.append(clean)
+    return out
+
+
+def _chat_title(messages: list[dict]) -> str:
+    for m in messages:
+        if m["role"] == "user":
+            title = " ".join((m.get("label") or m.get("content") or "").split())
+            if title:
+                return title if len(title) <= 80 else title[:79] + "…"
+    return "Tomt samtal"
+
+
+def _chat_summary(chat: dict) -> dict:
+    return {
+        "id": chat["id"],
+        "created": chat["created"],
+        "updated": chat["updated"],
+        "model": chat.get("model", ""),
+        "title": _chat_title(chat["messages"]),
+        "messages": len(chat["messages"]),
+    }
+
+
+def list_chats(storage: Storage, name: str) -> list[dict]:
+    """Dokumentets samtal, senast ändrade först."""
+    storage._require(name)
+    folder = storage._chat_dir(name)
+    chats = []
+    for f in folder.glob("*.json") if folder.exists() else []:
+        try:
+            chats.append(_chat_summary(json.loads(f.read_text(encoding="utf-8"))))
+        except (OSError, ValueError, KeyError, TypeError):
+            continue  # en trasig fil ska inte dölja de andra
+    return sorted(chats, key=lambda c: c["updated"], reverse=True)
+
+
+def read_chat(storage: Storage, name: str, cid: str) -> dict:
+    storage._require(name)
+    path = storage._chat_path(name, cid)
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise NotFound("Samtalet finns inte.") from None
+
+
+def save_chat(storage: Storage, name: str, cid: str, messages: object, model: str = "") -> dict:
+    """Skapar eller ersätter ett samtal. Returnerar sammanfattningen."""
+    with storage._lock:
+        storage._require(name)
+        path = storage._chat_path(name, cid)
+        now = _now().isoformat(timespec="seconds")
+        created = now
+        if path.exists():
+            try:
+                created = json.loads(path.read_text(encoding="utf-8")).get("created", now)
+            except (OSError, ValueError):
+                pass
+        chat = {"id": cid, "created": created, "updated": now, "model": model[:200], "messages": _clean_messages(messages)}
+        _atomic_write(path, _check_json_size(chat, MAX_CHAT_BYTES, "Samtalet") + "\n")
+        return _chat_summary(chat)
+
+
+def delete_chat(storage: Storage, name: str, cid: str) -> None:
+    """Flyttar samtalet till papperskorgen."""
+    with storage._lock:
+        storage._require(name)
+        path = storage._chat_path(name, cid)
+        if not path.exists():
+            raise NotFound("Samtalet finns inte.")
+        trash = storage.root / ".trash"
+        trash.mkdir(exist_ok=True)
+        stamp = _now().strftime("%Y%m%dT%H%M%S")
+        os.replace(path, trash / f"{stamp}-{validate_name(name)}.chat-{cid}.json")

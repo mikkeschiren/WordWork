@@ -10,15 +10,20 @@ import "./style.css";
 import { diffWords } from "diff";
 import { api, ApiError, type Version } from "./api";
 import { AIPanel } from "./ai";
+import { renderCharPanel } from "./chars";
 import { closeMenu, openContextMenu } from "./contextmenu";
+import { diffChars } from "diff";
+import { fixTypography, QUOTE_STYLES, type QuoteStyle } from "./typography";
 import { DocEditor, type ViewMode } from "./editor";
+import { renameTracked, trackWords } from "./goal";
 import { SpellService } from "./spell";
-import { analyze, LIX_SCALE, lixLevel, type TextStats } from "./stats";
+import { analyze, LIX_SCALE, lixLevel, quickStats, type TextStats } from "./stats";
 import {
   applySettings,
   FONTS,
   loadSettings,
   saveSettings,
+  syncSettings,
   THEMES,
   type Font,
   type Settings,
@@ -54,19 +59,38 @@ class App {
   private statusWords = h("span");
   private statusChars = h("span");
   private statusLix = h("button", { class: "status-lix", title: "Läsbarhet – öppna analys" });
+  private statusGoal = h("span", { class: "status-goal", hidden: true });
   private statusSave = h("span", { class: "save-state" });
   private docsDrawer = h("aside", { class: "drawer left", "aria-label": "Dokument" });
   private historyDrawer = h("aside", { class: "drawer right", "aria-label": "Versionshistorik" });
   private analysisDrawer = h("aside", { class: "drawer right wide", "aria-label": "Textanalys" });
   private aiDrawer = h("aside", { class: "drawer right wide ai", "aria-label": "AI-assistent" });
   private aiButton = h("button", { hidden: true, title: `AI-assistent (${modKey}+J)` }, "AI");
+  private charsPanel = h("div", {
+    class: "popover chars",
+    id: "panel-chars",
+    role: "dialog",
+    "aria-label": "Infoga tecken",
+  });
+  private charsButton = h(
+    "button",
+    { "aria-controls": "panel-chars", "aria-expanded": "false", title: `Infoga tecken (${modKey}+.)` },
+    "Tecken",
+  );
+  private settingsButton = h(
+    "button",
+    { "aria-controls": "panel-settings", "aria-expanded": "false", title: "Inställningar" },
+    "Inställningar",
+  );
   private ai: AIPanel;
   private spell = new SpellService();
   private highlighted: string | null = null;
   private includeStopwords = false;
   private analysisTimer: number | undefined;
-  private settingsPanel = h("div", { class: "popover", role: "dialog", "aria-label": "Utseende" });
+  private settingsPanel = h("div", { class: "popover", role: "dialog", "aria-label": "Inställningar" });
   private banner = h("div", { class: "banner", role: "alert", hidden: true });
+  /** Visas när servern kör en nyare version än den som laddats i fliken. */
+  private updateNotice = h("div", { class: "banner update", role: "status", hidden: true });
 
   constructor(root: HTMLElement) {
     applySettings(this.settings);
@@ -76,7 +100,8 @@ class App {
     this.editor = new DocEditor({
       host,
       spell: this.spell,
-      onChange: (md) => this.onChange(md),
+      typography: () => ({ enabled: this.settings.autoTypography, quotes: this.settings.quoteStyle }),
+      onChange: () => this.onChange(),
       onActivity: () => {
         document.body.classList.add("typing");
         closeMenu();
@@ -89,6 +114,7 @@ class App {
         openContextMenu(event, view, {
           spell: this.spell,
           replace: (from, to, text) => this.editor.replaceRange(from, to, text),
+          openChars: () => this.toggleChars(true),
         }),
     });
     this.editor.typewriter = this.settings.typewriter;
@@ -104,8 +130,22 @@ class App {
         return this.editor.selectText(phrase);
       },
       flush: () => this.flush(),
+      prefs: () => this.settings,
+      savePrefs: (patch) => {
+        Object.assign(this.settings, patch);
+        saveSettings(this.settings);
+      },
     });
     this.aiButton.addEventListener("click", () => this.toggleDrawer(this.aiDrawer));
+    this.aiDrawer.id = "panel-ai";
+    this.aiButton.setAttribute("aria-controls", "panel-ai");
+    this.aiButton.setAttribute("aria-expanded", "false");
+    this.settingsPanel.id = "panel-settings";
+    this.settingsButton.addEventListener("click", (e) => this.toggleSettings(e));
+    this.charsButton.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.toggleChars();
+    });
 
     const viewBtn = (mode: ViewMode, label: string) =>
       h(
@@ -126,11 +166,7 @@ class App {
       h(
         "div",
         { class: "group" },
-        h(
-          "button",
-          { onclick: () => this.toggleDrawer(this.docsDrawer), title: `Dokument (${modKey}+O)` },
-          "Dokument",
-        ),
+        this.panelButton(this.docsDrawer, "Dokument", `Dokument (${modKey}+O)`),
         h("button", { onclick: () => this.newDocument(), title: "Nytt dokument" }, "Nytt"),
         h("button", { onclick: () => this.showExport(), title: `Exportera (${modKey}+E)` }, "Exportera"),
       ),
@@ -139,10 +175,11 @@ class App {
         "div",
         { class: "group" },
         h("div", { class: "segmented", role: "group", "aria-label": "Vy" }, ...Object.values(this.viewBtns)),
-        h("button", { onclick: () => this.toggleDrawer(this.analysisDrawer) }, "Analys"),
+        this.panelButton(this.analysisDrawer, "Analys", "Textanalys: LIX, statistik och ordfrekvens"),
         this.aiButton,
-        h("button", { onclick: () => this.toggleDrawer(this.historyDrawer) }, "Historik"),
-        h("button", { onclick: (e: Event) => this.toggleSettings(e) }, "Utseende"),
+        this.panelButton(this.historyDrawer, "Historik", "Versionshistorik"),
+        this.charsButton,
+        this.settingsButton,
         h("button", { onclick: () => this.toggleFullscreen(), title: "Helskärm" }, "Helskärm"),
       ),
     );
@@ -155,12 +192,14 @@ class App {
       this.statusWords,
       this.statusChars,
       this.statusLix,
+      this.statusGoal,
       this.statusSave,
     );
 
     root.append(
       topbar,
       this.banner,
+      this.updateNotice,
       h("main", { class: "page" }, host),
       statusbar,
       this.docsDrawer,
@@ -168,6 +207,7 @@ class App {
       this.analysisDrawer,
       this.aiDrawer,
       this.settingsPanel,
+      this.charsPanel,
     );
 
     this.bindGlobalEvents();
@@ -177,6 +217,14 @@ class App {
 
   // ---------------- uppstart ----------------
   async start(): Promise<void> {
+    await this.loadServerSettings();
+    void api
+      .health()
+      .then((h) => {
+        if (h.problem) this.showProblem(h.problem);
+      })
+      .catch(() => undefined);
+    this.watchVersion();
     void this.spell.loadDictionary();
     void this.ai.init().then((enabled) => {
       this.aiButton.hidden = !enabled;
@@ -195,6 +243,23 @@ class App {
     if (!name || !docs.some((d) => d.name === name)) name = docs[0]?.name ?? null;
     if (!name) name = (await api.create()).name;
     await this.open(name);
+  }
+
+  /** Inställningarna sparas på servern; webbläsarens kopia användes bara för snabb start. */
+  private async loadServerSettings(): Promise<void> {
+    try {
+      if (!(await syncSettings(this.settings))) return;
+    } catch {
+      return; // servern svarar inte – fortsätt med webbläsarens kopia
+    }
+    const s = this.settings;
+    applySettings(s);
+    this.editor.typewriter = s.typewriter;
+    if (this.spell.enabled !== s.spellcheck) {
+      this.spell.enabled = s.spellcheck;
+      this.spell.changed();
+    }
+    if (this.settingsPanel.classList.contains("open")) this.renderSettings();
   }
 
   // ---------------- dokument ----------------
@@ -236,6 +301,8 @@ class App {
     await this.flush();
     try {
       const doc = await api.rename(this.current.name, name);
+      renameTracked(this.current.name, doc.name);
+      this.ai.renamed(this.current.name, doc.name);
       this.current = { name: doc.name, modified: doc.modified };
       localStorage.setItem(LAST_DOC_KEY, doc.name);
       this.updateTitle();
@@ -263,13 +330,10 @@ class App {
   }
 
   // ---------------- sparning ----------------
-  private onChange(md: string): void {
-    this.updateStats(md);
+  private onChange(): void {
+    // Markdown serialiseras inte här (dyrt i långa manus) – först vid sparning.
+    this.updateStats();
     if (!this.current || this.saveState === "conflict") return;
-    if (md === this.lastSaved) {
-      if (this.saveState === "dirty") this.setSaveState("saved");
-      return;
-    }
     this.setSaveState("dirty");
     window.clearTimeout(this.saveTimer);
     this.saveTimer = window.setTimeout(() => void this.save(), AUTOSAVE_MS);
@@ -356,6 +420,54 @@ class App {
     this.banner.hidden = false;
   }
 
+  /**
+   * En flik som var öppen när containern byggdes om kör fortfarande den gamla
+   * koden. Kontrollera versionen när fönstret får fokus och varje minut.
+   */
+  private versionWatched = false;
+  private watchVersion(): void {
+    if (this.versionWatched) return;
+    this.versionWatched = true;
+    let last = 0;
+    const check = async () => {
+      if (Date.now() - last < 10_000) return;
+      last = Date.now();
+      try {
+        const { version } = await api.health();
+        if (version && version !== __APP_VERSION__) this.showUpdate(version);
+      } catch {
+        /* servern startar om – försök igen senare */
+      }
+    };
+    window.setInterval(() => void check(), 60_000);
+    window.addEventListener("focus", () => void check());
+  }
+
+  private showUpdate(version: string): void {
+    if (!this.updateNotice.hidden) return;
+    this.updateNotice.replaceChildren(
+      h("span", {}, `Word Work har uppdaterats till ${version}. Ladda om sidan för att använda den nya versionen.`),
+      h(
+        "button",
+        {
+          class: "primary",
+          onclick: async () => {
+            await this.flush();
+            location.reload();
+          },
+        },
+        "Ladda om",
+      ),
+    );
+    this.updateNotice.hidden = false;
+  }
+
+  /** Allvarligt problem (t.ex. datamappen går inte att skriva i) – visas tills det åtgärdats. */
+  private showProblem(message: string): void {
+    this.banner.replaceChildren(h("span", {}, message));
+    this.banner.hidden = false;
+  }
+
   private hideBanner(): void {
     this.banner.hidden = true;
   }
@@ -381,29 +493,121 @@ class App {
   }
 
   private updateStats(_md?: string): void {
-    const stats = analyze(this.editor.getPlainText(), { top: 0 });
+    const stats = quickStats(this.editor.getPlainText());
     this.statusWords.textContent = `${stats.words.toLocaleString("sv-SE")} ord`;
     this.statusChars.textContent = `${stats.chars.toLocaleString("sv-SE")} tecken`;
     this.statusLix.textContent = stats.lix === null ? "LIX –" : `LIX ${Math.round(stats.lix)}`;
     this.statusLix.title =
       stats.lix === null ? "Läsbarhet" : `Läsbarhet: ${lixLevel(stats.lix).label.toLowerCase()} – öppna analys`;
+    this.updateGoal(stats.words);
     this.scheduleAnalysis();
   }
 
+  private updateGoal(words: number): void {
+    const goal = this.settings.dailyGoal;
+    if (!this.current) return;
+    const written = trackWords(this.current.name, words);
+    this.statusGoal.hidden = !goal;
+    if (!goal) return;
+    const pct = Math.min(100, Math.round((written / goal) * 100));
+    const done = written >= goal;
+    this.statusGoal.replaceChildren(
+      h("span", { class: "goal-bar", "aria-hidden": "true" }, h("i", { style: `width:${pct}%` })),
+      done
+        ? `Dagens mål nått: ${written.toLocaleString("sv-SE")} ord`
+        : `${written.toLocaleString("sv-SE")} / ${goal.toLocaleString("sv-SE")} ord i dag`,
+    );
+    this.statusGoal.classList.toggle("done", done);
+    this.statusGoal.title = "Skrivna ord i dag, i alla dokument. Målet ställs in under Inställningar.";
+  }
+
+  private showShortcuts(): void {
+    this.closeDrawers();
+    const rows: [string, string][] = [
+      [`${modKey}+S`, "Spara och skapa en version i historiken"],
+      [`${modKey}+/`, "Växla mellan Skriv och Markdown"],
+      [`${modKey}+O`, "Dokumentlistan"],
+      [`${modKey}+E`, "Exportera"],
+      [`${modKey}+J`, "AI-assistent"],
+      [`${modKey}+.`, "Infoga tecken (citattecken, tankstreck m.m.)"],
+      ['" \' -- ... 12-15', "Blir ” ’ – … 12–15 automatiskt (Backsteg ångrar)"],
+      [`${modKey}+B / ${modKey}+I`, "Fetstil / kursiv (Skriv-vyn)"],
+      [`${modKey}+Z / ${modKey}+Shift+Z`, "Ångra / gör om"],
+      ["# + mellanslag", "Rubrik (## för underrubrik)"],
+      ["> + mellanslag", "Citat"],
+      ["- + mellanslag", "Punktlista (1. för numrerad)"],
+      ["Högerklick", "Stavningsförslag, egen ordlista och synonymer"],
+      ["Shift+högerklick", "Webbläsarens vanliga meny"],
+      ["F1", "Den här listan"],
+      ["Esc", "Stäng paneler och dialoger"],
+    ];
+    void showModal((close) =>
+      h(
+        "div",
+        { class: "shortcuts" },
+        h("h2", {}, "Kortkommandon"),
+        h(
+          "table",
+          {},
+          h(
+            "tbody",
+            {},
+            ...rows.map(([k, v]) => h("tr", {}, h("td", {}, h("kbd", {}, k)), h("td", {}, v))),
+          ),
+        ),
+        h("div", { class: "actions" }, h("button", { class: "primary", onclick: close }, "Stäng")),
+      ),
+    );
+  }
+
   // ---------------- lådor & paneler ----------------
+  /** Knapp som öppnar/stänger en låda, med aria-expanded/aria-controls. */
+  private panelButton(drawer: HTMLElement, label: string, title: string): HTMLButtonElement {
+    drawer.id ||= `panel-${label.toLowerCase().replace(/[^a-zåäö]+/g, "-")}`;
+    return h(
+      "button",
+      {
+        onclick: () => this.toggleDrawer(drawer),
+        title,
+        "aria-controls": drawer.id,
+        "aria-expanded": "false",
+      },
+      label,
+    );
+  }
+
+  /** Håller aria-expanded i synk med vilka paneler som är öppna. */
+  private syncExpanded(): void {
+    for (const btn of document.querySelectorAll<HTMLElement>("[aria-controls]")) {
+      const panel = document.getElementById(btn.getAttribute("aria-controls") ?? "");
+      if (panel) btn.setAttribute("aria-expanded", String(panel.classList.contains("open")));
+    }
+  }
+
   private toggleDrawer(drawer: HTMLElement): void {
     const open = !drawer.classList.contains("open");
     this.closeDrawers();
     if (open) {
       drawer.classList.add("open");
       document.body.dataset.drawer = drawer.classList.contains("left") ? "left" : "right";
-      if (drawer === this.docsDrawer) void this.renderDocs();
-      else if (drawer === this.analysisDrawer) this.renderAnalysis();
-      else if (drawer === this.aiDrawer) void this.ai.render().then(() => this.ai.focusInput());
-      else void this.renderHistory();
+      let ready: Promise<void> | void;
+      if (drawer === this.docsDrawer) ready = this.renderDocs();
+      else if (drawer === this.analysisDrawer) ready = this.renderAnalysis();
+      else if (drawer === this.aiDrawer) ready = this.ai.render().then(() => this.ai.focusInput());
+      else ready = this.renderHistory();
+      // Flytta fokus in i panelen så att den går att använda med tangentbordet.
+      if (drawer !== this.aiDrawer) {
+        void Promise.resolve(ready).then(() => {
+          const target =
+            drawer.querySelector<HTMLElement>(".list li.active .item, .list .item, .freq button") ??
+            drawer.querySelector<HTMLElement>("button, input, select, textarea");
+          target?.focus({ preventScroll: true });
+        });
+      }
     } else {
       this.editor.focus();
     }
+    this.syncExpanded();
   }
 
   private closeDrawers(): void {
@@ -412,10 +616,12 @@ class App {
     this.historyDrawer.classList.remove("open");
     this.aiDrawer.classList.remove("open");
     this.settingsPanel.classList.remove("open");
+    this.charsPanel.classList.remove("open");
     if (this.analysisDrawer.classList.contains("open")) {
       this.analysisDrawer.classList.remove("open");
       this.setHighlight(null);
     }
+    this.syncExpanded();
   }
 
   private async renderDocs(): Promise<void> {
@@ -1141,6 +1347,92 @@ class App {
     });
   }
 
+  private toggleChars(forceOpen = false): void {
+    const open = forceOpen || !this.charsPanel.classList.contains("open");
+    this.closeDrawers();
+    if (!open) {
+      this.editor.focus();
+      return;
+    }
+    this.charsPanel.classList.add("open");
+    renderCharPanel({
+      panel: this.charsPanel,
+      insert: (c) => this.editor.insertText(c),
+      close: () => {
+        this.charsPanel.classList.remove("open");
+        this.syncExpanded();
+        this.editor.focus();
+      },
+      fixAll: () => void this.showTypographyFix(),
+    });
+    this.syncExpanded();
+  }
+
+  /** Rättar typografin i hela texten – med förhandsvisning och en version i historiken först. */
+  private async showTypographyFix(): Promise<void> {
+    if (!this.current) return;
+    this.closeDrawers();
+    await this.flush();
+    const name = this.current.name;
+    const original = this.editor.getMarkdown();
+    const { text, changes } = fixTypography(original, this.settings.quoteStyle);
+    if (!changes.length) {
+      toast("Typografin ser redan bra ut – inget att rätta");
+      return;
+    }
+    const shown = changes.slice(0, 200);
+    const list = h("ol", { class: "typo-changes" });
+    for (const c of shown) {
+      const row = h("div", { class: "typo-diff" });
+      for (const part of diffChars(c.before, c.after)) {
+        row.append(h(part.added ? "ins" : part.removed ? "del" : "span", {}, part.value));
+      }
+      list.append(h("li", {}, h("span", { class: "meta" }, `Rad ${c.line}`), row));
+    }
+    await showModal((close) =>
+      h(
+        "div",
+        { class: "typo-modal" },
+        h("h2", {}, "Rätta typografin i texten"),
+        h(
+          "p",
+          { class: "meta" },
+          `${changes.length} ${changes.length === 1 ? "rad ändras" : "rader ändras"}: raka citattecken, dubbla bindestreck, tre punkter och intervall som 12-15. ` +
+            "Kod, länkadresser och frontmatter lämnas orörda. Den nuvarande texten sparas först som en version i historiken.",
+        ),
+        list,
+        changes.length > shown.length
+          ? h("p", { class: "meta" }, `… och ${changes.length - shown.length} rader till.`)
+          : null,
+        h(
+          "div",
+          { class: "actions" },
+          h("button", { onclick: close }, "Avbryt"),
+          h(
+            "button",
+            {
+              class: "primary",
+              onclick: async () => {
+                try {
+                  await api.snapshot(name, "Före typografirättning");
+                } catch {
+                  /* versionen är en extra säkerhet – fortsätt ändå */
+                }
+                if (this.current?.name !== name) return close();
+                this.editor.load(text);
+                this.onChange();
+                await this.save(true);
+                close();
+                toast(`Typografin är rättad på ${changes.length} rader – den tidigare texten finns i historiken`);
+              },
+            },
+            "Rätta",
+          ),
+        ),
+      ),
+    );
+  }
+
   private toggleSettings(e?: Event): void {
     e?.stopPropagation();
     const open = !this.settingsPanel.classList.contains("open");
@@ -1148,6 +1440,8 @@ class App {
     if (!open) return;
     this.renderSettings();
     this.settingsPanel.classList.add("open");
+    this.syncExpanded();
+    this.settingsPanel.querySelector<HTMLElement>("select, input, button")?.focus({ preventScroll: true });
   }
 
   private renderSettings(): void {
@@ -1217,7 +1511,7 @@ class App {
     ) as Record<Font, string>;
 
     this.settingsPanel.replaceChildren(
-      h("h2", {}, "Utseende"),
+      h("h2", {}, "Inställningar"),
       h("p", { class: "hint" }, "Typsnittet gäller hela texten. Själva dokumentet är alltid ren Markdown."),
       select<Theme>("Tema", s.theme, THEMES, (v) => update({ theme: v })),
       select<Font>("Typsnitt", s.font, fontLabels, (v) => update({ font: v })),
@@ -1227,7 +1521,29 @@ class App {
       check("Dimma andra stycken än det jag skriver i", s.focusParagraph, (v) => update({ focusParagraph: v })),
       check("Skrivmaskinsläge (aktuell rad i mitten)", s.typewriter, (v) => update({ typewriter: v })),
       check("Stavningskontroll", s.spellcheck, (v) => update({ spellcheck: v })),
-      h("button", { class: "link", onclick: () => this.showDictionary() }, "Egen ordlista …"),
+      h("h3", { class: "popover-sub" }, "Typografi medan du skriver"),
+      check("Byt automatiskt till typografiska tecken", s.autoTypography, (v) => update({ autoTypography: v })),
+      select<QuoteStyle>("Citattecken", s.quoteStyle, QUOTE_STYLES, (v) => update({ quoteStyle: v })),
+      h("p", { class: "hint" }, "\" → ”   ' → ’   -- → –   --- → —   ... → …   12-15 → 12–15. Backsteg direkt efter ångrar."),
+      range(
+        "Dagens mål",
+        s.dailyGoal,
+        0,
+        5000,
+        100,
+        (v) => (v ? `${v.toLocaleString("sv-SE")} ord` : "Av"),
+        (v) => {
+          update({ dailyGoal: v });
+          this.updateStats();
+        },
+      ),
+      h(
+        "div",
+        { class: "links" },
+        h("button", { class: "link", onclick: () => this.showDictionary() }, "Egen ordlista …"),
+        h("button", { class: "link", onclick: () => this.showShortcuts() }, "Kortkommandon …"),
+      ),
+      h("p", { class: "hint version" }, `Word Work ${__APP_VERSION__}`),
     );
   }
 
@@ -1248,6 +1564,12 @@ class App {
       } else if (isMod(e) && e.key.toLowerCase() === "j" && !this.aiButton.hidden) {
         e.preventDefault();
         this.toggleDrawer(this.aiDrawer);
+      } else if (isMod(e) && e.key === ".") {
+        e.preventDefault();
+        this.toggleChars();
+      } else if (e.key === "F1") {
+        e.preventDefault();
+        this.showShortcuts();
       } else if (isMod(e) && e.key.toLowerCase() === "e") {
         e.preventDefault();
         void this.showExport();
@@ -1277,9 +1599,21 @@ class App {
       const t = e.target as Node;
       if (
         this.settingsPanel.classList.contains("open") &&
-        !this.settingsPanel.contains(t)
+        !this.settingsPanel.contains(t) &&
+        !this.settingsButton.contains(t)
       ) {
         this.settingsPanel.classList.remove("open");
+        this.syncExpanded();
+      }
+      if (
+        this.charsPanel.classList.contains("open") &&
+        t.isConnected && // ett klickat tecken kan redan ha ritats om
+        !this.charsPanel.contains(t) &&
+        !this.charsButton.contains(t) &&
+        !(t as Element).closest?.(".context-menu, .prose, .source")
+      ) {
+        this.charsPanel.classList.remove("open");
+        this.syncExpanded();
       }
       // Klick i texten stänger öppna lådor.
       if ((t as Element).closest?.(".page") && document.querySelector(".drawer.open")) {

@@ -9,6 +9,8 @@ services:
       - ${WW_DATA_PATH:-./data}:/data
     environment:
       WW_SNAPSHOT_MINUTES: ${WW_SNAPSHOT_MINUTES:-5}
+      # Värdnamn som får användas för att nå appen (skydd mot DNS-rebinding).
+      WW_ALLOWED_HOSTS: ${WW_ALLOWED_HOSTS:-localhost,127.0.0.1,::1}
       # AI-stöd via Ollama. Lokal instans: http://host.docker.internal:11434 – tom sträng stänger av AI.
       WW_OLLAMA_URL: ${WW_OLLAMA_URL-https://ollama.dglive.net}
       WW_OLLAMA_MODEL: ${WW_OLLAMA_MODEL:-qwen3.6:35b}

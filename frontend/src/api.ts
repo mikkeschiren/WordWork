@@ -64,6 +64,32 @@ export interface AIChatRequest {
   history: { role: "user" | "assistant"; content: string }[];
 }
 
+export interface StoredMessage {
+  role: "user" | "assistant";
+  content?: string;
+  label?: string;
+  thinking?: string;
+  meta?: string;
+  error?: string;
+}
+
+export interface ChatSummary {
+  id: string;
+  created: string;
+  updated: string;
+  model: string;
+  title: string;
+  messages: number;
+}
+
+export interface Chat {
+  id: string;
+  created: string;
+  updated: string;
+  model: string;
+  messages: StoredMessage[];
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -95,7 +121,16 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 
 const doc = (name: string) => `/documents/${encodeURIComponent(name)}`;
 
+export interface Health {
+  status: "ok" | "error";
+  version: string;
+  problem: string | null;
+  ai: boolean;
+  language: boolean;
+}
+
 export const api = {
+  health: () => request<Health>("GET", "/health"),
   list: () => request<DocumentInfo[]>("GET", "/documents"),
   create: (name?: string, content = "") =>
     request<DocumentInfo>("POST", "/documents", { name, content }),
@@ -110,6 +145,13 @@ export const api = {
     request<DocumentInfo>("POST", `${doc(name)}/rename`, { name: newName }),
   remove: (name: string) => request<void>("DELETE", doc(name)),
   history: (name: string) => request<Version[]>("GET", `${doc(name)}/history`),
+  settings: () => request<{ saved: boolean; settings: Record<string, unknown> }>("GET", "/settings"),
+  saveSettings: (settings: object) => request<{ settings: Record<string, unknown> }>("PUT", "/settings", settings),
+  chats: (name: string) => request<ChatSummary[]>("GET", `${doc(name)}/chats`),
+  chat: (name: string, id: string) => request<Chat>("GET", `${doc(name)}/chats/${encodeURIComponent(id)}`),
+  saveChat: (name: string, id: string, model: string, messages: StoredMessage[]) =>
+    request<ChatSummary>("PUT", `${doc(name)}/chats/${encodeURIComponent(id)}`, { model, messages }),
+  removeChat: (name: string, id: string) => request<void>("DELETE", `${doc(name)}/chats/${encodeURIComponent(id)}`),
   version: (name: string, vid: string) =>
     request<{ id: string; content: string }>("GET", `${doc(name)}/history/${vid}`),
   snapshot: (name: string, label = "") =>
