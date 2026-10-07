@@ -9,6 +9,7 @@ import "./style.css";
 
 import { diffWords } from "diff";
 import { api, ApiError, type Version } from "./api";
+import { AIPanel } from "./ai";
 import { closeMenu, openContextMenu } from "./contextmenu";
 import { DocEditor, type ViewMode } from "./editor";
 import { SpellService } from "./spell";
@@ -57,6 +58,9 @@ class App {
   private docsDrawer = h("aside", { class: "drawer left", "aria-label": "Dokument" });
   private historyDrawer = h("aside", { class: "drawer right", "aria-label": "Versionshistorik" });
   private analysisDrawer = h("aside", { class: "drawer right wide", "aria-label": "Textanalys" });
+  private aiDrawer = h("aside", { class: "drawer right wide ai", "aria-label": "AI-assistent" });
+  private aiButton = h("button", { hidden: true, title: `AI-assistent (${modKey}+J)` }, "AI");
+  private ai: AIPanel;
   private spell = new SpellService();
   private highlighted: string | null = null;
   private includeStopwords = false;
@@ -77,7 +81,10 @@ class App {
         document.body.classList.add("typing");
         closeMenu();
       },
-      onSelection: () => this.scheduleAnalysis(),
+      onSelection: () => {
+        this.scheduleAnalysis();
+        if (this.aiDrawer.classList.contains("open")) this.ai.updateScope();
+      },
       onContextMenu: (event, view) =>
         openContextMenu(event, view, {
           spell: this.spell,
@@ -85,6 +92,20 @@ class App {
         }),
     });
     this.editor.typewriter = this.settings.typewriter;
+    this.ai = new AIPanel({
+      drawer: this.aiDrawer,
+      closeButton: () => this.closeButton(),
+      documentName: () => this.current?.name ?? null,
+      documentText: () => this.editor.getMarkdown(),
+      plainText: () => this.editor.getPlainText(),
+      selectionText: () => this.editor.getSelectionText(),
+      showInText: (phrase) => {
+        if (this.editor.mode !== "write") this.setView("write", false);
+        return this.editor.selectText(phrase);
+      },
+      flush: () => this.flush(),
+    });
+    this.aiButton.addEventListener("click", () => this.toggleDrawer(this.aiDrawer));
 
     const viewBtn = (mode: ViewMode, label: string) =>
       h(
@@ -111,6 +132,7 @@ class App {
           "Dokument",
         ),
         h("button", { onclick: () => this.newDocument(), title: "Nytt dokument" }, "Nytt"),
+        h("button", { onclick: () => this.showExport(), title: `Exportera (${modKey}+E)` }, "Exportera"),
       ),
       this.titleBtn,
       h(
@@ -118,6 +140,7 @@ class App {
         { class: "group" },
         h("div", { class: "segmented", role: "group", "aria-label": "Vy" }, ...Object.values(this.viewBtns)),
         h("button", { onclick: () => this.toggleDrawer(this.analysisDrawer) }, "Analys"),
+        this.aiButton,
         h("button", { onclick: () => this.toggleDrawer(this.historyDrawer) }, "Historik"),
         h("button", { onclick: (e: Event) => this.toggleSettings(e) }, "Utseende"),
         h("button", { onclick: () => this.toggleFullscreen(), title: "Helskärm" }, "Helskärm"),
@@ -143,15 +166,19 @@ class App {
       this.docsDrawer,
       this.historyDrawer,
       this.analysisDrawer,
+      this.aiDrawer,
       this.settingsPanel,
     );
 
     this.bindGlobalEvents();
+    this.bindDropImport();
     this.setView((localStorage.getItem(VIEW_KEY) as ViewMode) || "write", false);
   }
 
   // ---------------- uppstart ----------------
   async start(): Promise<void> {
+    void this.spell.loadDictionary();
+    void this.ai.init().then((enabled) => (this.aiButton.hidden = !enabled));
     const docs = await api.list();
     let name = localStorage.getItem(LAST_DOC_KEY);
     if (!name || !docs.some((d) => d.name === name)) name = docs[0]?.name ?? null;
@@ -163,6 +190,7 @@ class App {
   async open(name: string): Promise<void> {
     await this.flush();
     const doc = await api.get(name);
+    if (this.current?.name !== doc.name) this.ai?.reset();
     this.current = { name: doc.name, modified: doc.modified };
     this.lastSaved = doc.content;
     this.editor.load(doc.content);
@@ -360,6 +388,7 @@ class App {
       document.body.dataset.drawer = drawer.classList.contains("left") ? "left" : "right";
       if (drawer === this.docsDrawer) void this.renderDocs();
       else if (drawer === this.analysisDrawer) this.renderAnalysis();
+      else if (drawer === this.aiDrawer) void this.ai.render().then(() => this.ai.focusInput());
       else void this.renderHistory();
     } else {
       this.editor.focus();
@@ -370,6 +399,7 @@ class App {
     delete document.body.dataset.drawer;
     this.docsDrawer.classList.remove("open");
     this.historyDrawer.classList.remove("open");
+    this.aiDrawer.classList.remove("open");
     this.settingsPanel.classList.remove("open");
     if (this.analysisDrawer.classList.contains("open")) {
       this.analysisDrawer.classList.remove("open");
@@ -422,9 +452,11 @@ class App {
         { class: "drawer-head" },
         this.closeButton(),
         h("h2", {}, "Dokument"),
+        h("button", { onclick: () => this.chooseImport(), title: "Importera DOCX, ODT, RTF, HTML, Markdown eller text" }, "Importera …"),
         h("button", { onclick: () => this.newDocument() }, "Nytt"),
       ),
       list,
+      h("p", { class: "meta hint-drop" }, "Du kan också släppa filer var som helst i fönstret för att importera dem."),
     );
   }
 
@@ -745,7 +777,7 @@ class App {
                 h(
                   "li",
                   {},
-                  h("span", { class: "item" }, w),
+                  h("span", { class: "item" }, w, w.includes(" ") ? h("span", { class: "tag" }, "fras") : null),
                   h(
                     "button",
                     {
@@ -754,7 +786,7 @@ class App {
                       "aria-label": `Ta bort ${w}`,
                       onclick: async () => {
                         const r = await api.dictionaryRemove(w);
-                        this.spell.forget(w);
+                        this.spell.forget(w, r.words);
                         render(r.words);
                       },
                     },
@@ -762,18 +794,223 @@ class App {
                   ),
                 ),
               )
-            : [h("li", { class: "empty" }, "Ordlistan är tom. Högerklicka på ett understruket ord för att lägga till det.")]),
+            : [h("li", { class: "empty" }, "Ordlistan är tom. Högerklicka på ett understruket ord – eller markera flera ord – för att lägga till.")]),
         );
       };
       render(words);
+      const input = h("input", {
+        type: "text",
+        placeholder: "Nytt ord eller fras, t.ex. open source",
+        "aria-label": "Nytt ord eller fras",
+      }) as HTMLInputElement;
+      const form = h(
+        "form",
+        { class: "dict-add" },
+        input,
+        h("button", { type: "submit" }, "Lägg till"),
+      );
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const entry = input.value.trim().split(/\s+/).join(" ");
+        if (!entry) return;
+        try {
+          await this.spell.addToDictionary(entry);
+          input.value = "";
+          render((await api.dictionary()).words);
+        } catch (err) {
+          toast(errorText(err));
+        }
+      });
       return h(
         "div",
         {},
         h("h2", {}, "Egen ordlista"),
-        h("p", { class: "meta" }, "Ord här godkänns av stavningskontrollen. Listan sparas i datamappen (.wordwork/ordlista.txt)."),
+        h(
+          "p",
+          { class: "meta" },
+          "Ord här godkänns av stavningskontrollen. En fras (t.ex. ”open source”) godkänns bara när orden står tillsammans – ”open” ensamt räknas fortfarande som stavfel. Listan sparas i datamappen (.wordwork/ordlista.txt).",
+        ),
+        form,
         list,
         h("div", { class: "actions" }, h("button", { class: "primary", onclick: close }, "Klar")),
       );
+    });
+  }
+
+  // ---------------- import & export ----------------
+  private async showExport(): Promise<void> {
+    if (!this.current) return;
+    this.closeDrawers();
+    await this.flush();
+    const name = this.current.name;
+    let opts;
+    try {
+      opts = await api.exportOptions();
+    } catch (e) {
+      toast(errorText(e));
+      return;
+    }
+    const remembered = (key: string, fallback: string) => {
+      try {
+        return localStorage.getItem(key) ?? fallback;
+      } catch {
+        return fallback;
+      }
+    };
+    let format = remembered("ww.exportFormat", "docx");
+    let template = remembered("ww.exportTemplate", "standard");
+    if (!opts.formats.some((f) => f.key === format)) format = opts.formats[0].key;
+
+    await showModal((close) => {
+      const tplSelect = h("select", {
+        "aria-label": "Mall",
+        onchange: (e: Event) => (template = (e.target as HTMLSelectElement).value),
+      });
+      for (const t of opts.templates) {
+        tplSelect.append(h("option", { value: t.key, selected: t.key === template }, t.label));
+      }
+      const tplRow = h("label", { class: "field" }, h("span", {}, "Mall"), tplSelect);
+      const updateTpl = () => {
+        const f = opts.formats.find((x) => x.key === format);
+        tplSelect.disabled = !f?.templates;
+        tplRow.classList.toggle("disabled", !f?.templates);
+      };
+      const radios = h(
+        "div",
+        { class: "radio-list", role: "radiogroup", "aria-label": "Format" },
+        ...opts.formats.map((f) =>
+          h(
+            "label",
+            {},
+            h("input", {
+              type: "radio",
+              name: "export-format",
+              value: f.key,
+              checked: f.key === format,
+              onchange: () => {
+                format = f.key;
+                updateTpl();
+              },
+            }),
+            h("span", {}, f.label),
+          ),
+        ),
+      );
+      updateTpl();
+      return h(
+        "div",
+        { class: "export-modal" },
+        h("h2", {}, `Exportera ”${name}”`),
+        radios,
+        tplRow,
+        h("p", { class: "meta" }, "Mallen gäller Word och OpenDocument. Titel och författare i frontmatter (title, author) följer med som dokumentegenskaper."),
+        h(
+          "div",
+          { class: "actions" },
+          h("button", { onclick: close }, "Avbryt"),
+          h(
+            "button",
+            {
+              class: "primary",
+              onclick: () => {
+                try {
+                  localStorage.setItem("ww.exportFormat", format);
+                  localStorage.setItem("ww.exportTemplate", template);
+                } catch {
+                  /* ignorera */
+                }
+                const tpl = opts.formats.find((x) => x.key === format)?.templates ? template : "standard";
+                void this.download(api.exportUrl(name, format, tpl));
+                close();
+              },
+            },
+            "Ladda ner",
+          ),
+        ),
+      );
+    });
+  }
+
+  private async download(url: string): Promise<void> {
+    // Hämta först, så att fel kan visas i stället för en trasig nedladdning.
+    try {
+      const res = await fetch(url);
+      if (!res.ok) {
+        let msg = res.statusText;
+        try {
+          msg = (await res.json()).detail ?? msg;
+        } catch {
+          /* inget JSON */
+        }
+        throw new Error(msg);
+      }
+      const blob = await res.blob();
+      const cd = res.headers.get("content-disposition") ?? "";
+      const m = /filename\*=UTF-8''([^;]+)/i.exec(cd);
+      const filename = m ? decodeURIComponent(m[1]) : "dokument";
+      const a = h("a", { href: URL.createObjectURL(blob), download: filename });
+      document.body.append(a);
+      a.click();
+      a.remove();
+      window.setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
+      toast(`Exporterade ${filename}`);
+    } catch (e) {
+      toast(`Kunde inte exportera: ${errorText(e)}`);
+    }
+  }
+
+  private chooseImport(): void {
+    const input = h("input", {
+      type: "file",
+      multiple: true,
+      accept: ".docx,.odt,.rtf,.html,.htm,.md,.markdown,.txt",
+    }) as HTMLInputElement;
+    input.addEventListener("change", () => void this.importFiles([...(input.files ?? [])]));
+    input.click();
+  }
+
+  private async importFiles(files: File[]): Promise<void> {
+    let last: string | null = null;
+    for (const file of files) {
+      try {
+        toast(`Importerar ${file.name} …`);
+        const doc = await api.importFile(file);
+        last = doc.name;
+      } catch (e) {
+        toast(`${file.name}: ${errorText(e)}`);
+      }
+    }
+    if (last) {
+      await this.open(last);
+      this.closeDrawers();
+      toast(files.length > 1 ? `${files.length} filer importerade` : `Importerade ”${last}”`);
+    }
+  }
+
+  private bindDropImport(): void {
+    const overlay = h("div", { class: "drop-overlay", hidden: true }, h("div", {}, "Släpp för att importera"));
+    document.body.append(overlay);
+    let depth = 0;
+    const hasFiles = (e: DragEvent) => [...(e.dataTransfer?.types ?? [])].includes("Files");
+    window.addEventListener("dragenter", (e) => {
+      if (!hasFiles(e)) return;
+      depth++;
+      overlay.hidden = false;
+    });
+    window.addEventListener("dragleave", (e) => {
+      if (!hasFiles(e)) return;
+      depth = Math.max(0, depth - 1);
+      if (!depth) overlay.hidden = true;
+    });
+    window.addEventListener("dragover", (e) => {
+      if (hasFiles(e)) e.preventDefault();
+    });
+    window.addEventListener("drop", (e) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      depth = 0;
+      overlay.hidden = true;
+      void this.importFiles([...(e.dataTransfer?.files ?? [])]);
     });
   }
 
@@ -881,6 +1118,12 @@ class App {
       } else if (isMod(e) && e.key === "/") {
         e.preventDefault();
         this.setView(this.editor.mode === "write" ? "markdown" : "write");
+      } else if (isMod(e) && e.key.toLowerCase() === "j" && !this.aiButton.hidden) {
+        e.preventDefault();
+        this.toggleDrawer(this.aiDrawer);
+      } else if (isMod(e) && e.key.toLowerCase() === "e") {
+        e.preventDefault();
+        void this.showExport();
       } else if (isMod(e) && e.key.toLowerCase() === "o") {
         e.preventDefault();
         this.toggleDrawer(this.docsDrawer);

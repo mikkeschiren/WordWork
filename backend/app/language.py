@@ -22,8 +22,26 @@ def _clean(word: str) -> str:
     return word.strip().strip("-'’")
 
 
+MAX_PHRASE_WORDS = 6
+
+
+def normalize_entry(entry: str) -> str | None:
+    """Ett ord eller en fras (2–6 ord, åtskilda av ett blanksteg). None om ogiltig."""
+    parts = entry.split()
+    if not parts or len(parts) > MAX_PHRASE_WORDS:
+        return None
+    if any(len(p) > MAX_WORD_LEN for p in parts):
+        return None
+    return " ".join(parts)
+
+
 class PersonalDictionary:
-    """Egen ordlista – en rad per ord i en vanlig textfil."""
+    """Egen ordlista – en rad per ord eller fras i en vanlig textfil.
+
+    Fraser (t.ex. "open source") godkänns bara som helhet: själva matchningen
+    mot texten görs i editorn, eftersom den kräver ordens ordning och position.
+    Ett ord som bara finns i en fras godkänns alltså inte på egen hand här.
+    """
 
     def __init__(self, path: Path) -> None:
         self.path = path

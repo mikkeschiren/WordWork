@@ -45,7 +45,17 @@ def test_personal_dictionary(client, tmp_path):
     ] == ["lagercrantzsk"]
     client.delete("/api/spell/dictionary/Lagercrantzsk")
     assert client.get("/api/spell/dictionary").json()["words"] == ["fanzinekultur"]
-    assert client.post("/api/spell/dictionary", json={"word": "två ord"}).status_code == 400
+    assert client.post("/api/spell/dictionary", json={"word": "ett två tre fyra fem sex sju"}).status_code == 400
+    assert client.post("/api/spell/dictionary", json={"word": "   "}).status_code == 400
+
+
+def test_phrases_in_dictionary(client):
+    r = client.post("/api/spell/dictionary", json={"word": "  open   source "})
+    assert r.status_code == 201 and "open source" in r.json()["words"]
+    # Orden i en fras godkänns inte på egen hand – det avgör editorn utifrån sammanhanget.
+    assert client.post("/api/spell/check", json={"words": ["source"]}).json()["misspelled"] == ["source"]
+    client.delete("/api/spell/dictionary/open source")
+    assert "open source" not in client.get("/api/spell/dictionary").json()["words"]
 
 
 def test_synonyms_with_base_form(client):

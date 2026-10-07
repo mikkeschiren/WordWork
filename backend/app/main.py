@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import asdict
+from urllib.parse import quote
 
+import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from .ai import QUICK_PROMPTS, AIError, OllamaClient, build_messages, context_size, is_external
 from .config import Settings
-from .language import Language
-from .storage import Storage, StorageError
+from .convert import EXPORT_FORMATS, MAX_IMPORT_BYTES, TEMPLATE_LABELS, ConvertError, export_document, import_file
+from .language import Language, normalize_entry
+from .storage import Storage, StorageError, safe_name
 
 
 class CreateDoc(BaseModel):
@@ -37,11 +42,26 @@ class CheckWords(BaseModel):
     words: list[str] = Field(max_length=5000)
 
 
+class ChatMessage(BaseModel):
+    role: str
+    content: str = Field(max_length=200_000)
+
+
+class ChatRequest(BaseModel):
+    model: str = ""
+    think: bool = True
+    prompt: str = Field(default="", max_length=10_000)
+    quick: str | None = None
+    document: str = Field(default="", max_length=1_000_000)
+    selection: str = Field(default="", max_length=1_000_000)
+    history: list[ChatMessage] = Field(default_factory=list, max_length=100)
+
+
 class DictionaryWord(BaseModel):
-    word: str = Field(min_length=1, max_length=64)
+    word: str = Field(min_length=1, max_length=200)
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, ai_transport: httpx.AsyncBaseTransport | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
     storage = Storage(settings.data_dir, settings.snapshot_minutes)
     app = FastAPI(title="Word Work", docs_url="/api/docs", openapi_url="/api/openapi.json")
@@ -49,20 +69,78 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     language = Language(settings.resources_dir, settings.data_dir / ".wordwork" / "ordlista.txt")
     app.state.language = language
 
+    ollama = (
+        OllamaClient(settings.ollama_url, settings.ollama_model, transport=ai_transport)
+        if settings.ollama_url
+        else None
+    )
+
+    @app.exception_handler(AIError)
+    async def ai_error(_: Request, exc: AIError) -> JSONResponse:
+        return JSONResponse({"detail": str(exc)}, status_code=exc.status)
+
+    @app.exception_handler(ConvertError)
+    async def convert_error(_: Request, exc: ConvertError) -> JSONResponse:
+        return JSONResponse({"detail": str(exc)}, status_code=exc.status)
+
     @app.exception_handler(StorageError)
     async def storage_error(_: Request, exc: StorageError) -> JSONResponse:
         return JSONResponse({"detail": str(exc)}, status_code=exc.status)
 
     @app.get("/api/health")
     def health() -> dict:
-        return {"status": "ok", "ai": bool(settings.ollama_url), "language": language.ready}
+        return {"status": "ok", "ai": ollama is not None, "language": language.ready}
+
+    # ---------- AI (Ollama) ----------
+    @app.get("/api/ai/status")
+    def ai_status() -> dict:
+        if ollama is None:
+            return {"enabled": False}
+        return {
+            "enabled": True,
+            "host": httpx.URL(settings.ollama_url).host,
+            "external": is_external(settings.ollama_url),
+            "default_model": settings.ollama_model,
+            "quick": list(QUICK_PROMPTS),
+        }
+
+    @app.get("/api/ai/models")
+    async def ai_models() -> dict:
+        if ollama is None:
+            raise HTTPException(404, "AI-stödet är avstängt.")
+        return {"models": await ollama.models(), "default_model": settings.ollama_model}
+
+    @app.post("/api/ai/chat")
+    async def ai_chat(body: ChatRequest) -> StreamingResponse:
+        if ollama is None:
+            raise HTTPException(404, "AI-stödet är avstängt.")
+        if body.quick and body.quick not in QUICK_PROMPTS:
+            raise HTTPException(400, "Okänt snabbval.")
+        try:
+            messages = build_messages(
+                body.document, body.selection, [m.model_dump() for m in body.history], body.prompt, body.quick
+            )
+        except AIError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        num_ctx = context_size(sum(len(m["content"]) for m in messages))
+        question = messages[-1]["content"]
+
+        async def events():
+            yield json.dumps({"type": "start", "question": question}, ensure_ascii=False) + "\n"
+            try:
+                async for ev in ollama.chat(body.model, messages, body.think, num_ctx):
+                    yield json.dumps(ev, ensure_ascii=False) + "\n"
+            except AIError as exc:
+                yield json.dumps({"type": "error", "message": str(exc)}, ensure_ascii=False) + "\n"
+
+        return StreamingResponse(events(), media_type="application/x-ndjson")
 
     # ---------- språk ----------
     def _clean_word(word: str) -> str:
-        word = word.strip()
-        if not word or any(c.isspace() for c in word) or len(word) > 64:
-            raise HTTPException(400, "Ogiltigt ord.")
-        return word
+        entry = normalize_entry(word)
+        if entry is None:
+            raise HTTPException(400, "Ange ett ord eller en fras på högst sex ord.")
+        return entry
 
     @app.post("/api/spell/check")
     def spell_check(body: CheckWords) -> dict:
@@ -116,6 +194,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.delete("/api/documents/{name}", status_code=204)
     def delete_doc(name: str) -> None:
         storage.delete(name)
+
+    # ---------- import & export ----------
+    @app.get("/api/export/formats")
+    def export_formats() -> dict:
+        return {
+            "formats": [
+                {"key": f.key, "label": f.label, "templates": f.templates} for f in EXPORT_FORMATS.values()
+            ],
+            "templates": [{"key": k, "label": v} for k, v in TEMPLATE_LABELS.items()],
+        }
+
+    @app.get("/api/documents/{name}/export")
+    def export_doc(name: str, format: str = "docx", template: str = "standard") -> Response:
+        content, _ = storage.read(name)
+        data, fmt = export_document(name, content, format, template)
+        filename = f"{name}.{fmt.ext}"
+        ascii_name = filename.encode("ascii", "replace").decode().replace("?", "_").replace('"', "")
+        return Response(
+            data,
+            media_type=fmt.media_type,
+            headers={
+                "Content-Disposition": f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}"
+            },
+        )
+
+    @app.post("/api/import", status_code=201)
+    async def import_doc(request: Request, filename: str = Query(min_length=1, max_length=255)) -> dict:
+        size = int(request.headers.get("content-length") or 0)
+        if size > MAX_IMPORT_BYTES:
+            raise ConvertError("Filen är för stor (max 25 MB).")
+        data = await request.body()
+        stem, markdown = import_file(filename, data)
+        return asdict(storage.create(safe_name(stem, "Importerad"), markdown))
 
     # ---------- historik ----------
     @app.get("/api/documents/{name}/history")

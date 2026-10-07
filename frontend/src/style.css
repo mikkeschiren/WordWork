@@ -957,3 +957,279 @@ button.link {
 .drawer.left .drawer-head .close {
   order: 10;
 }
+
+/* ---------- Export & import ---------- */
+.radio-list {
+  display: grid;
+  gap: 2px;
+  margin: 12px 0;
+}
+
+.radio-list label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.radio-list label:hover {
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
+.radio-list input {
+  accent-color: var(--accent);
+}
+
+label.field {
+  display: grid;
+  grid-template-columns: 60px 1fr;
+  align-items: center;
+  gap: 8px;
+}
+
+label.field select {
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  min-width: 0;
+}
+
+label.field.disabled {
+  opacity: 0.45;
+}
+
+.export-modal .meta {
+  margin: 12px 0 0;
+}
+
+.hint-drop {
+  margin-top: 16px;
+  padding: 0 10px;
+}
+
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--bg) 80%, transparent);
+  backdrop-filter: blur(3px);
+  pointer-events: none;
+}
+
+.drop-overlay div {
+  padding: 28px 40px;
+  border: 2px dashed var(--accent);
+  border-radius: 16px;
+  font-size: 18px;
+  color: var(--text);
+  background: var(--panel);
+}
+
+.dict-add {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0 4px;
+}
+
+dialog.modal .dict-add input[type="text"] {
+  flex: 1;
+  margin: 0;
+}
+
+.list .tag {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+
+.list.dict .item {
+  flex-direction: row;
+  align-items: center;
+}
+
+/* ---------- AI-assistent ---------- */
+.drawer.ai.open {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: hidden;
+}
+
+.drawer.ai .scope {
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.ai-notice {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.ai-notice.local {
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
+.ai-settings {
+  display: grid;
+  gap: 8px;
+}
+
+.ai-quick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ai-quick .chip {
+  font-size: 12.5px;
+}
+
+.ai-messages {
+  flex: 1;
+  min-height: 120px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 2px;
+}
+
+.ai-empty {
+  margin: auto 0;
+  color: var(--muted);
+  text-align: center;
+  padding: 0 12px;
+}
+
+.ai-msg {
+  border-radius: 10px;
+  padding: 8px 12px;
+  line-height: 1.5;
+  overflow-wrap: break-word;
+}
+
+.ai-msg.user {
+  align-self: flex-end;
+  max-width: 85%;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  white-space: pre-wrap;
+}
+
+.ai-msg.assistant {
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+
+.ai-msg.pending .ai-body::after {
+  content: "▍";
+  color: var(--accent);
+  animation: ai-blink 1s steps(2) infinite;
+}
+
+@keyframes ai-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+.ai-body > :first-child {
+  margin-top: 0;
+}
+
+.ai-body > :last-child {
+  margin-bottom: 0;
+}
+
+.ai-body ol,
+.ai-body ul {
+  padding-left: 1.3em;
+}
+
+.ai-body li {
+  margin: 0.35em 0;
+}
+
+.ai-thinking summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.ai-thinking div {
+  max-height: 200px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  font-size: 12px;
+  color: var(--muted);
+  border-left: 2px solid var(--line);
+  padding-left: 8px;
+  margin-bottom: 8px;
+}
+
+.ai-meta {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.ai-error {
+  margin: 6px 0 0;
+  color: #c0503c;
+  font-size: 13px;
+}
+
+button.cite {
+  display: inline;
+  padding: 0 2px;
+  border-radius: 3px;
+  color: var(--accent);
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  font: inherit;
+}
+
+.ai-composer {
+  display: grid;
+  gap: 6px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.ai-composer textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 60px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  font: inherit;
+}
+
+.ai-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ai-actions .meta {
+  flex: 1;
+  font-size: 11px;
+  text-align: right;
+}

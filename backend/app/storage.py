@@ -65,6 +65,13 @@ def validate_name(name: str) -> str:
     return name
 
 
+def safe_name(name: str, fallback: str = "Namnlös") -> str:
+    """Gör om t.ex. ett filnamn till ett giltigt dokumentnamn."""
+    name = _FORBIDDEN.sub(" ", name).lstrip(". ")
+    name = " ".join(name.split())[:MAX_NAME].strip()
+    return name or fallback
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 

@@ -118,7 +118,7 @@ Baserad på `PLAN.md`. Målet är en distraktionsfri ordbehandlare för kulturjo
 - **Leverans:** Alla språkfunktioner utom AI.
 
 ### Fas 3 – Import/export (≈ 1 vecka)
-- Pandoc-integration för MD, DOCX, ODT, RTF, HTML, TXT (ingen PDF).
+- Pandoc-integration för MD, DOCX, ODT, RTF, HTML, TXT (ingen PDF). Dra och släpp för import.
 - Enkla exportmallar (typsnitt, marginaler) för DOCX/ODT, t.ex. ”manus” och ”artikel”.
 - **Leverans:** Text kan lämnas till redaktion/förlag i deras format.
 
@@ -144,8 +144,8 @@ Baserad på `PLAN.md`. Målet är en distraktionsfri ordbehandlare för kulturjo
 | Variabel | Exempel | Beskrivning |
 |---|---|---|
 | `WW_DATA_DIR` | `/data` | Dokument och egna ordlistor |
-| `WW_OLLAMA_URL` | `http://host.docker.internal:11434` | Ollama-instans (tom = AI av) |
-| `WW_OLLAMA_MODEL` | `llama3.1` | Förvald modell |
+| `WW_OLLAMA_URL` | `https://ollama.dglive.net` | Ollama-instans (tom = AI av) |
+| `WW_OLLAMA_MODEL` | `qwen3.6:35b` | Förvald modell |
 | `WW_SNAPSHOT_MINUTES` | `5` | Minsta tid mellan automatiska ögonblicksbilder |
 
 ---
@@ -170,6 +170,7 @@ Baserad på `PLAN.md`. Målet är en distraktionsfri ordbehandlare för kulturjo
 4. **PDF-export:** nej, inte i v1.
 5. **Versionshistorik:** ja, ingår i fas 1.
 6. **Typsnitt:** ett typsnitt för hela dokumentet, valt som tema. Markdown är alltid originalet, även när man redigerar i WYSIWYG-vyn.
+7. **Metadata:** lagras som YAML-frontmatter i början av Markdown-filen. Skydd finns sedan fas 2: frontmatter visas inte i Skriv-vyn, bevaras exakt vid sparning och räknas inte i ordräkning eller analys. En metadatapanel kommer senare, och Pandoc använder fälten vid export.
 
 ## 7. Status
 
@@ -180,5 +181,22 @@ Baserad på `PLAN.md`. Målet är en distraktionsfri ordbehandlare för kulturjo
   - Synonymer från Synlex, inklusive grundform för böjda ord.
   - Högerklicksmeny för förslag och synonymer.
   - Analyspanel: LIX med skala, OVIX, statistik, ordfrekvens med markering i texten, längsta meningar och analys av markering. LIX visas i statusraden.
+- **Tillägg till fas 2:** fraser i den egna ordlistan, till exempel "open source". De godkänns bara som helhet, och en svensk sammansättning efter bindestreck kontrolleras separat.
 - **Kvar från fas 2:** nominalkvot (kräver ordklasstaggning). Optimering för mycket långa manus: Markdown serialiseras i dag vid varje paus i skrivandet, vilket märks först kring 50 000+ ord.
-- **Nästa:** fas 3 – import och export med Pandoc (DOCX, ODT, RTF, HTML, TXT).
+- **Fas 3 – klar (2026-10-07):**
+  - Export till DOCX, ODT, RTF, HTML, MD och TXT med Pandoc 3.9 (bundlad via pypandoc_binary).
+  - Mallarna Standard, Manus och Artikel för DOCX och ODT: A4, 2,5 cm marginaler, sidnummer.
+  - A4 gäller alla exporter, även Standard (Pandocs egna mallar är i Letter-format), RTF och utskrift av HTML.
+  - Frontmatter (title, author) blir dokumentegenskaper, språket sätts till sv-SE och citattecken lämnas orörda.
+  - Import av DOCX, ODT, RTF, HTML, MD och TXT med Lua-filter som rensar bort sådant Markdown inte kan uttrycka. Import kan också ske genom att dra och släppa filer.
+  - Imagen blir cirka 160 MB större av Pandoc-binären.
+- **Fas 4 – klar (2026-10-07):**
+  - AI-assistent via Ollama. Standard är `https://ollama.dglive.net` med `qwen3.6:35b`, och båda går att ändra med `WW_OLLAMA_URL` och `WW_OLLAMA_MODEL`.
+  - Backend-proxy med strömning (NDJSON). AI-modulen saknar åtkomst till lagringen.
+  - Svensk systemprompt som förbjuder omskrivning. Testat mot servern: modellen avböjer att skriva om och ger förslag med exakta citat.
+  - Fem snabbval och fri chatt med följdfrågor. Markering avgör omfånget, och klickbara citat visar stället i texten.
+  - Valbart resonemangsläge ("tänk efter"), modellval, stopp-knapp och upplysning om extern server.
+  - Kontextstorlek (num_ctx) i steg om 16k, 32k och 64k. Texter längre än cirka 150 000 tecken kräver att man markerar ett avsnitt.
+- **Modellval (2026-10-07):** på ollama.dglive.net finns bara en chattmodell, `qwen3.6:35b`. Den har ungefär 145 tokens/s och fungerar väl med resonemang på (cirka 25–35 s per granskning). Utan resonemang händer det att den hittar på språkfel, och svenskan har ibland stavfel. Att utvärdera: `gemma4:26b` eller `gemma4:31b`, som troligen är starkare på svenska.
+- **Ej gjort i fas 4:** samtalen sparas inte mellan sessioner, utan ligger i minnet per dokument.
+- **Nästa:** fas 5 – polering, tillgänglighet, prestanda för långa manus, säkerhet och release.

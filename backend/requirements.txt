@@ -1,3 +1,5 @@
 fastapi==0.142.2
 uvicorn==0.54.0
 spylls==0.1.7
+pypandoc_binary==1.17
+httpx==0.28.1

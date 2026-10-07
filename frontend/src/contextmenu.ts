@@ -5,7 +5,7 @@
 import type { EditorView } from "@tiptap/pm/view";
 import { TextSelection } from "@tiptap/pm/state";
 import { api } from "./api";
-import { wordAt, type SpellService, type WordRange } from "./spell";
+import { WORD_RE, wordAt, type SpellService, type WordRange } from "./spell";
 import { h, toast } from "./ui";
 
 interface MenuDeps {
@@ -44,10 +44,14 @@ export function openContextMenu(event: MouseEvent, view: EditorView, deps: MenuD
   const range = wordAt(view.state, hit.pos);
   if (!range) return false;
 
-  // Markera ordet så det syns vad menyn gäller.
-  view.dispatch(
-    view.state.tr.setSelection(TextSelection.create(view.state.doc, range.from, range.to)),
-  );
+  const phrase = phraseCandidate(view, hit.pos, range, deps.spell);
+  // Markera ordet så det syns vad menyn gäller – men behåll en egen markering
+  // som användaren gjort för att lägga till en fras.
+  if (!phrase?.fromSelection) {
+    view.dispatch(
+      view.state.tr.setSelection(TextSelection.create(view.state.doc, range.from, range.to)),
+    );
+  }
 
   closeMenu();
   const menu = h("div", { class: "context-menu", role: "menu" });
@@ -58,6 +62,7 @@ export function openContextMenu(event: MouseEvent, view: EditorView, deps: MenuD
     closeMenu();
   };
 
+  if (phrase) buildPhrase(menu, phrase.text, deps);
   const misspelled = deps.spell.isMisspelled(range.word);
   if (misspelled) buildSpelling(menu, range, deps, choose);
   buildSynonyms(menu, range, choose);
@@ -65,6 +70,60 @@ export function openContextMenu(event: MouseEvent, view: EditorView, deps: MenuD
   document.body.append(menu);
   position(menu, event.clientX, event.clientY);
   return true;
+}
+
+const MAX_PHRASE_WORDS = 6;
+
+/**
+ * En fras att föreslå för den egna ordlistan:
+ *  - den egna markeringen, om klicket är i den och den är 2–6 ord, eller
+ *  - en följd av understrukna ord runt det klickade ("open source").
+ */
+function phraseCandidate(
+  view: EditorView,
+  pos: number,
+  range: WordRange,
+  spell: SpellService,
+): { text: string; fromSelection: boolean } | null {
+  const sel = view.state.selection;
+  if (!sel.empty && sel.from <= pos && pos <= sel.to) {
+    const text = view.state.doc.textBetween(sel.from, sel.to, " ", " ").split(/\s+/).filter(Boolean).join(" ");
+    const n = text.match(WORD_RE)?.length ?? 0;
+    WORD_RE.lastIndex = 0;
+    if (n >= 2 && n <= MAX_PHRASE_WORDS) return { text, fromSelection: true };
+  }
+  if (!spell.isMisspelled(range.word)) return null;
+
+  const $pos = view.state.doc.resolve(range.from);
+  const block = $pos.parent;
+  const start = $pos.start();
+  const text = block.textBetween(0, block.content.size, undefined, "\n");
+  const words = [...text.matchAll(WORD_RE)].map((m) => ({ word: m[0], from: m.index!, to: m.index! + m[0].length }));
+  const i = words.findIndex((w) => w.from === range.from - start);
+  if (i < 0) return null;
+  const joined = (a: number, b: number) => /^[ \t]+$/.test(text.slice(words[a].to, words[b].from));
+  let a = i;
+  let b = i;
+  while (a > 0 && b - a + 1 < MAX_PHRASE_WORDS && joined(a - 1, a) && spell.isMisspelled(words[a - 1].word)) a--;
+  while (b < words.length - 1 && b - a + 1 < MAX_PHRASE_WORDS && joined(b, b + 1) && spell.isMisspelled(words[b + 1].word)) b++;
+  if (a === b) return null;
+  return { text: words.slice(a, b + 1).map((w) => w.word).join(" "), fromSelection: false };
+}
+
+function buildPhrase(menu: HTMLElement, phrase: string, deps: MenuDeps): void {
+  menu.append(
+    h("div", { class: "menu-heading" }, `Fras: ”${phrase}”`),
+    item("Lägg till fras i egen ordlista", async () => {
+      closeMenu();
+      try {
+        await deps.spell.addToDictionary(phrase);
+        toast(`”${phrase}” godkänns nu som fras – orden var för sig gör det inte`);
+      } catch (e) {
+        toast(e instanceof Error ? e.message : "Kunde inte spara i ordlistan");
+      }
+    }),
+    h("hr", {}),
+  );
 }
 
 function item(label: string, onclick: () => void, cls = ""): HTMLButtonElement {
