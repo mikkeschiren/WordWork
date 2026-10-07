@@ -36,7 +36,7 @@ WW_DATA_PATH=~/Dokument/Texter docker compose up -d
 - **Gränssnittet tonas bort** medan du skriver och kommer tillbaka när du rör musen.
 - **Stavningskontroll** (svensk Hunspell-ordlista) stryker under okända ord i Skriv-vyn.
   - Högerklicka på ett ord för rättningsförslag, *Lägg till i egen ordlista* eller *Ignorera*.
-  - Den egna ordlistan sparas i `data/.wordwork/ordlista.txt` och kan redigeras under *Utseende → Egen ordlista*.
+  - Den egna ordlistan sparas i `data/.wordwork/ordlista.txt`. Under *Utseende → Egen ordlista* kan du lägga till, söka och ta bort poster, klicka på en post för att ändra den, eller redigera hela listan som text. Ändrar du filen direkt läses den in igen automatiskt.
   - **Fraser** för utländska uttryck, till exempel "open source" eller "New York Times", godkänns bara när orden står tillsammans. "open" ensamt räknas fortfarande som stavfel. I "open source-licensen" kontrolleras "licensen" som vanligt.
     - Högerklicka på två eller flera understrukna ord i rad, eller markera frasen och högerklicka. Välj sedan *Lägg till fras i egen ordlista*.
     - Frasen kan också skrivas in direkt under *Egen ordlista*.
@@ -64,6 +64,7 @@ WW_DATA_PATH=~/Dokument/Texter docker compose up -d
   - *Tänk efter först* låter modellen resonera innan den svarar. Det ger träffsäkrare svar men tar längre tid. Resonemanget kan visas.
   - Modell väljs i panelen. Listan hämtas från Ollama-servern.
   - Används en extern server står det i panelen, eftersom texten då lämnar datorn.
+  - Går Ollama-servern inte att nå, eller saknar den chattmodell, fungerar allt annat som vanligt. AI-knappen döljs då och visas igen när servern svarar. Appen kontrollerar detta varje minut och när fönstret får fokus.
 
 | Kortkommando | Gör |
 |---|---|

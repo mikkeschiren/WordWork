@@ -162,6 +162,13 @@ export class SpellService {
     this.changed();
   }
 
+  /** Efter större ändringar i ordlistan: kontrollera alla ord på nytt. */
+  reload(entries: string[]): void {
+    this.setDictionary(entries);
+    this.known.clear();
+    this.changed();
+  }
+
   /** Läser in fraserna ur den egna ordlistan (enskilda ord kontrolleras på servern). */
   setDictionary(entries: string[]): void {
     this.phrases = entries.filter((e) => e.includes(" ")).map(phraseRegex);

@@ -23,8 +23,13 @@ class FakeOllama:
     def __init__(self):
         self.requests: list[dict] = []
         self.fail = False
+        self.down = False
 
     def handler(self, request: httpx.Request) -> httpx.Response:
+        if self.down:
+            raise httpx.ConnectError("connection refused")
+        if request.url.path == "/api/version":
+            return httpx.Response(200, json={"version": "0.34.2"})
         if request.url.path == "/api/tags":
             return httpx.Response(200, json=TAGS)
         if request.url.path == "/api/show":
@@ -124,7 +129,7 @@ def test_chat_error_from_ollama_is_streamed(client, fake):
 def test_disabled(tmp_path):
     settings = Settings(data_dir=tmp_path, static_dir=None, snapshot_minutes=5, ollama_url="", ollama_model="")
     c = TestClient(create_app(settings))
-    assert c.get("/api/ai/status").json() == {"enabled": False}
+    assert c.get("/api/ai/status").json()["enabled"] is False
     assert c.post("/api/ai/chat", json={"prompt": "Hej"}).status_code == 404
 
 
@@ -134,3 +139,43 @@ def test_helpers():
     assert not is_external("http://localhost:11434")
     assert is_external("https://ollama.dglive.net")
     assert context_size(1000) == 16_384 and context_size(90_000) == 65_536
+
+
+def test_unreachable_server_disables_ai_but_app_works(tmp_path):
+    fake = FakeOllama()
+    fake.down = True
+    settings = Settings(
+        data_dir=tmp_path, static_dir=None, snapshot_minutes=5,
+        ollama_url="https://ollama.example.net", ollama_model="qwen3.6:35b",
+    )
+    c = TestClient(create_app(settings, ai_transport=httpx.MockTransport(fake.handler)))
+    st = c.get("/api/ai/status").json()
+    assert st["enabled"] is False and st["configured"] is True and "kan inte nås" in st["reason"]
+    assert c.post("/api/ai/chat", json={"prompt": "Hej"}).status_code == 503
+    # resten av appen påverkas inte
+    assert c.get("/api/health").json()["status"] == "ok"
+    assert c.post("/api/documents", json={"name": "Text"}).status_code == 201
+
+
+def test_server_without_chat_models(tmp_path, monkeypatch):
+    fake = FakeOllama()
+    monkeypatch.setitem(TAGS, "models", [{"name": "nomic-embed-text:latest", "size": 1, "details": {}}])
+    settings = Settings(
+        data_dir=tmp_path, static_dir=None, snapshot_minutes=5,
+        ollama_url="http://localhost:11434", ollama_model="qwen3.6:35b",
+    )
+    c = TestClient(create_app(settings, ai_transport=httpx.MockTransport(fake.handler)))
+    st = c.get("/api/ai/status").json()
+    assert st["enabled"] is False and "chattmodell" in st["reason"]
+
+
+def test_real_unreachable_host_is_fast(tmp_path):
+    import time
+    settings = Settings(
+        data_dir=tmp_path, static_dir=None, snapshot_minutes=5,
+        ollama_url="http://127.0.0.1:9", ollama_model="qwen3.6:35b",
+    )
+    c = TestClient(create_app(settings))
+    t = time.monotonic()
+    assert c.get("/api/ai/status").json()["enabled"] is False
+    assert time.monotonic() - t < 5

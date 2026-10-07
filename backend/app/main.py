@@ -61,6 +61,10 @@ class DictionaryWord(BaseModel):
     word: str = Field(min_length=1, max_length=200)
 
 
+class DictionaryAll(BaseModel):
+    words: list[str] = Field(max_length=20_000)
+
+
 def create_app(settings: Settings | None = None, ai_transport: httpx.AsyncBaseTransport | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
     storage = Storage(settings.data_dir, settings.snapshot_minutes)
@@ -93,9 +97,12 @@ def create_app(settings: Settings | None = None, ai_transport: httpx.AsyncBaseTr
 
     # ---------- AI (Ollama) ----------
     @app.get("/api/ai/status")
-    def ai_status() -> dict:
+    async def ai_status() -> dict:
         if ollama is None:
-            return {"enabled": False}
+            return {"enabled": False, "reason": "AI-stödet är avstängt (WW_OLLAMA_URL är tom)."}
+        available, reason = await ollama.availability()
+        if not available:
+            return {"enabled": False, "configured": True, "reason": reason}
         return {
             "enabled": True,
             "host": httpx.URL(settings.ollama_url).host,
@@ -114,6 +121,9 @@ def create_app(settings: Settings | None = None, ai_transport: httpx.AsyncBaseTr
     async def ai_chat(body: ChatRequest) -> StreamingResponse:
         if ollama is None:
             raise HTTPException(404, "AI-stödet är avstängt.")
+        available, reason = await ollama.availability()
+        if not available:
+            raise HTTPException(503, reason)
         if body.quick and body.quick not in QUICK_PROMPTS:
             raise HTTPException(400, "Okänt snabbval.")
         try:
@@ -157,6 +167,28 @@ def create_app(settings: Settings | None = None, ai_transport: httpx.AsyncBaseTr
     @app.post("/api/spell/dictionary", status_code=201)
     def dictionary_add(body: DictionaryWord) -> dict:
         language.personal.add(_clean_word(body.word))
+        return {"words": language.personal.words()}
+
+    @app.put("/api/spell/dictionary")
+    def dictionary_replace(body: DictionaryAll) -> dict:
+        """Ersätter hela listan (redigering som text). Tomma rader ignoreras."""
+        entries, invalid = [], []
+        for raw in body.words:
+            if not raw.strip():
+                continue
+            entry = normalize_entry(raw)
+            (entries if entry else invalid).append(entry or raw.strip())
+        if invalid:
+            raise HTTPException(400, "Ogiltiga rader (högst sex ord per rad): " + ", ".join(invalid[:5]))
+        language.personal.replace_all(entries)
+        return {"words": language.personal.words()}
+
+    @app.put("/api/spell/dictionary/{word}")
+    def dictionary_rename(word: str, body: DictionaryWord) -> dict:
+        new = _clean_word(body.word)
+        if word not in language.personal.words():
+            raise HTTPException(404, f"”{word}” finns inte i ordlistan.")
+        language.personal.rename(word, new)
         return {"words": language.personal.words()}
 
     @app.delete("/api/spell/dictionary/{word}")

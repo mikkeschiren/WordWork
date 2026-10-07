@@ -33,6 +33,8 @@ export interface ExportOptions {
 
 export interface AIStatus {
   enabled: boolean;
+  configured?: boolean;
+  reason?: string;
   host?: string;
   external?: boolean;
   default_model?: string;
@@ -129,6 +131,9 @@ export const api = {
   dictionary: () => request<{ words: string[] }>("GET", "/spell/dictionary"),
   dictionaryAdd: (word: string) =>
     request<{ words: string[] }>("POST", "/spell/dictionary", { word }),
+  dictionaryRename: (word: string, newWord: string) =>
+    request<{ words: string[] }>("PUT", `/spell/dictionary/${encodeURIComponent(word)}`, { word: newWord }),
+  dictionaryReplace: (words: string[]) => request<{ words: string[] }>("PUT", "/spell/dictionary", { words }),
   dictionaryRemove: (word: string) =>
     request<{ words: string[] }>("DELETE", `/spell/dictionary/${encodeURIComponent(word)}`),
   synonyms: (word: string) =>

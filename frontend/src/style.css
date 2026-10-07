@@ -1233,3 +1233,49 @@ button.cite {
   font-size: 11px;
   text-align: right;
 }
+
+.dict-modal .dict-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+dialog.modal:has(.dict-modal) {
+  width: min(520px, 94vw);
+}
+
+.list.dict .item.editable {
+  cursor: text;
+  text-align: left;
+}
+
+.list.dict li input[type="text"] {
+  flex: 1;
+  margin: 2px 0;
+  padding: 6px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--bg);
+}
+
+.dict-body input[type="search"] {
+  width: 100%;
+  margin: 4px 0;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+}
+
+.dict-text {
+  width: 100%;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  font-family: ui-monospace, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  resize: vertical;
+}

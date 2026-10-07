@@ -129,6 +129,31 @@ class OllamaClient:
         self.default_model = default_model
         self._transport = transport
         self._cache = ModelCache()
+        self._availability: tuple[bool, str] = (False, "")
+        self._availability_checked = 0.0
+
+    async def availability(self) -> tuple[bool, str]:
+        """Går servern att nå och har den någon chattmodell? Cachas en kort stund,
+        så att appen fungerar som vanligt (utan AI) när servern inte svarar."""
+        ok, _ = self._availability
+        ttl = 30 if ok else 15
+        if self._availability_checked and time.monotonic() - self._availability_checked < ttl:
+            return self._availability
+        try:
+            async with httpx.AsyncClient(
+                base_url=self.base_url, transport=self._transport, timeout=httpx.Timeout(3.0)
+            ) as client:
+                try:
+                    (await client.get("/api/version")).raise_for_status()
+                except httpx.HTTPStatusError:
+                    pass  # servern svarar (t.ex. bakom en proxy utan /api/version) – modellistan avgör
+            models = await self.models()
+            result = (True, "") if models else (False, "Ollama-servern har ingen chattmodell installerad.")
+        except (httpx.HTTPError, AIError, ValueError) as exc:
+            result = (False, f"Ollama-servern på {self.base_url} kan inte nås ({exc.__class__.__name__}).")
+        self._availability = result
+        self._availability_checked = time.monotonic()
+        return result
 
     def _client(self, read_timeout: float | None = 30.0) -> httpx.AsyncClient:
         return httpx.AsyncClient(

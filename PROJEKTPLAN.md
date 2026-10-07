@@ -198,5 +198,8 @@ Baserad på `PLAN.md`. Målet är en distraktionsfri ordbehandlare för kulturjo
   - Valbart resonemangsläge ("tänk efter"), modellval, stopp-knapp och upplysning om extern server.
   - Kontextstorlek (num_ctx) i steg om 16k, 32k och 64k. Texter längre än cirka 150 000 tecken kräver att man markerar ett avsnitt.
 - **Modellval (2026-10-07):** på ollama.dglive.net finns bara en chattmodell, `qwen3.6:35b`. Den har ungefär 145 tokens/s och fungerar väl med resonemang på (cirka 25–35 s per granskning). Utan resonemang händer det att den hittar på språkfel, och svenskan har ibland stavfel. Att utvärdera: `gemma4:26b` eller `gemma4:31b`, som troligen är starkare på svenska.
+- **Tillägg efter fas 4:**
+  - AI stängs av automatiskt när Ollama-servern inte kan nås eller saknar chattmodell, och slås på igen när den svarar. Kontrollen har 3 s tidsgräns och cachas i 15–30 s. Resten av appen påverkas inte.
+  - Den egna ordlistan kan redigeras: ändra en post direkt, sök, redigera hela listan som text. Ändringar som görs direkt i `ordlista.txt` läses in automatiskt.
 - **Ej gjort i fas 4:** samtalen sparas inte mellan sessioner, utan ligger i minnet per dokument.
 - **Nästa:** fas 5 – polering, tillgänglighet, prestanda för långa manus, säkerhet och release.

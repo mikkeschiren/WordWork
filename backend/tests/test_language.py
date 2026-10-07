@@ -68,3 +68,25 @@ def test_synonyms_with_base_form(client):
     assert direct[0]["word"] == "bra" and not direct[0]["base_form"]
 
     assert client.get("/api/synonyms", params={"word": "xyzzy"}).json()["groups"] == []
+
+
+def test_edit_dictionary(client, tmp_path):
+    client.post("/api/spell/dictionary", json={"word": "Lagercrantz"})
+    r = client.put("/api/spell/dictionary/Lagercrantz", json={"word": "Lagercrantzsk"})
+    assert r.status_code == 200 and r.json()["words"] == ["Lagercrantzsk"]
+    assert client.put("/api/spell/dictionary/finns-inte", json={"word": "x"}).status_code == 404
+    r = client.put("/api/spell/dictionary", json={"words": ["  open  source ", "", "fanzine", "fanzine"]})
+    assert r.json()["words"] == ["fanzine", "open source"]
+    assert (tmp_path / ".wordwork" / "ordlista.txt").read_text() == "fanzine\nopen source\n"
+    r = client.put("/api/spell/dictionary", json={"words": ["ett två tre fyra fem sex sju"]})
+    assert r.status_code == 400 and "Ogiltiga" in r.json()["detail"]
+
+
+def test_dictionary_file_edited_by_hand(client, tmp_path):
+    import os, time
+    client.post("/api/spell/dictionary", json={"word": "qzfanzinx"})
+    path = tmp_path / ".wordwork" / "ordlista.txt"
+    path.write_text("# kommentar\nBergmansk\nNew  York Times\n", encoding="utf-8")
+    os.utime(path, (time.time() + 5, time.time() + 5))
+    assert client.get("/api/spell/dictionary").json()["words"] == ["Bergmansk", "New York Times"]
+    assert client.post("/api/spell/check", json={"words": ["Bergmansk", "qzfanzinx"]}).json()["misspelled"] == ["qzfanzinx"]

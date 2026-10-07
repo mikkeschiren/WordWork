@@ -45,30 +45,65 @@ class PersonalDictionary:
 
     def __init__(self, path: Path) -> None:
         self.path = path
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._words: set[str] = set()
-        if path.is_file():
-            self._words = {w.strip() for w in path.read_text(encoding="utf-8").splitlines() if w.strip()}
+        self._mtime: float | None = None
+        self._reload_if_changed()
+
+    def _reload_if_changed(self) -> None:
+        """Filen kan också redigeras för hand – läs om den när den ändrats."""
+        try:
+            mtime = self.path.stat().st_mtime
+        except FileNotFoundError:
+            mtime = None
+        if mtime == self._mtime:
+            return
+        with self._lock:
+            entries = set()
+            if mtime is not None:
+                for line in self.path.read_text(encoding="utf-8").splitlines():
+                    entry = normalize_entry(line)
+                    if entry and not line.lstrip().startswith("#"):
+                        entries.add(entry)
+            self._words = entries
+            self._mtime = mtime
 
     def words(self) -> list[str]:
+        self._reload_if_changed()
         return sorted(self._words, key=str.casefold)
 
     def __contains__(self, word: str) -> bool:
+        self._reload_if_changed()
         # "Bergman" i listan godkänner bara "Bergman"; "fanzine" godkänner även "Fanzine".
         return word in self._words or (word[:1].isupper() and word.lower() in self._words)
 
     def add(self, word: str) -> None:
         with self._lock:
+            self._reload_if_changed()
             self._words.add(word)
             self._save()
 
     def remove(self, word: str) -> None:
         with self._lock:
+            self._reload_if_changed()
             self._words.discard(word)
             self._save()
 
+    def rename(self, old: str, new: str) -> None:
+        with self._lock:
+            self._reload_if_changed()
+            self._words.discard(old)
+            self._words.add(new)
+            self._save()
+
+    def replace_all(self, entries: list[str]) -> None:
+        with self._lock:
+            self._words = set(entries)
+            self._save()
+
     def _save(self) -> None:
-        _atomic_write(self.path, "".join(f"{w}\n" for w in self.words()))
+        _atomic_write(self.path, "".join(f"{w}\n" for w in sorted(self._words, key=str.casefold)))
+        self._mtime = self.path.stat().st_mtime
 
 
 class Language:

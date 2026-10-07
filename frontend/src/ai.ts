@@ -119,6 +119,34 @@ export class AIPanel {
     return true;
   }
 
+  get available(): boolean {
+    return !!this.status?.enabled;
+  }
+
+  /** Varför AI-stödet är avstängt (t.ex. att servern inte kan nås). */
+  get reason(): string {
+    return this.status?.reason ?? "";
+  }
+
+  /**
+   * Kontrollerar med jämna mellanrum om Ollama-servern går att nå. Appen fungerar
+   * alltid; AI-funktionen slås bara på och av.
+   */
+  monitor(onChange: (available: boolean) => void, intervalMs = 60_000): void {
+    const check = async () => {
+      const before = this.available;
+      const now = await this.init();
+      if (now !== before) {
+        if (!now) this.stop();
+        if (now) this.models = []; // hämta modellistan på nytt
+        onChange(now);
+      }
+    };
+    window.setInterval(() => void check(), intervalMs);
+    // Kolla direkt när fönstret får fokus igen (t.ex. efter att datorn sovit).
+    window.addEventListener("focus", () => void check());
+  }
+
   private get messages(): Message[] {
     const key = this.deps.documentName() ?? "";
     let m = this.conversations.get(key);

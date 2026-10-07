@@ -178,7 +178,18 @@ class App {
   // ---------------- uppstart ----------------
   async start(): Promise<void> {
     void this.spell.loadDictionary();
-    void this.ai.init().then((enabled) => (this.aiButton.hidden = !enabled));
+    void this.ai.init().then((enabled) => {
+      this.aiButton.hidden = !enabled;
+      this.ai.monitor((available) => {
+        this.aiButton.hidden = !available;
+        if (!available) {
+          if (this.aiDrawer.classList.contains("open")) this.closeDrawers();
+          toast("AI-servern kan inte nås – AI-stödet är av tills den svarar igen");
+        } else {
+          toast("AI-stödet är tillgängligt igen");
+        }
+      });
+    });
     const docs = await api.list();
     let name = localStorage.getItem(LAST_DOC_KEY);
     if (!name || !docs.some((d) => d.name === name)) name = docs[0]?.name ?? null;
@@ -767,72 +778,188 @@ class App {
 
   private async showDictionary(): Promise<void> {
     this.closeDrawers();
-    const { words } = await api.dictionary();
+    let words = (await api.dictionary()).words;
+    let filter = "";
+    let textMode = false;
+
+    const apply = (ws: string[]) => {
+      words = ws;
+      this.spell.reload(ws);
+    };
+
     await showModal((close) => {
-      const list = h("ul", { class: "list dict" });
-      const render = (ws: string[]) => {
-        list.replaceChildren(
-          ...(ws.length
-            ? ws.map((w) =>
-                h(
-                  "li",
-                  {},
-                  h("span", { class: "item" }, w, w.includes(" ") ? h("span", { class: "tag" }, "fras") : null),
-                  h(
-                    "button",
-                    {
-                      class: "icon",
-                      title: `Ta bort ”${w}”`,
-                      "aria-label": `Ta bort ${w}`,
-                      onclick: async () => {
-                        const r = await api.dictionaryRemove(w);
-                        this.spell.forget(w, r.words);
-                        render(r.words);
-                      },
-                    },
-                    "×",
-                  ),
-                ),
-              )
-            : [h("li", { class: "empty" }, "Ordlistan är tom. Högerklicka på ett understruket ord – eller markera flera ord – för att lägga till.")]),
-        );
-      };
-      render(words);
-      const input = h("input", {
-        type: "text",
-        placeholder: "Nytt ord eller fras, t.ex. open source",
-        "aria-label": "Nytt ord eller fras",
-      }) as HTMLInputElement;
-      const form = h(
-        "form",
-        { class: "dict-add" },
-        input,
-        h("button", { type: "submit" }, "Lägg till"),
-      );
-      form.addEventListener("submit", async (e) => {
-        e.preventDefault();
-        const entry = input.value.trim().split(/\s+/).join(" ");
-        if (!entry) return;
-        try {
-          await this.spell.addToDictionary(entry);
-          input.value = "";
-          render((await api.dictionary()).words);
-        } catch (err) {
-          toast(errorText(err));
+      const body = h("div", { class: "dict-body" });
+      const count = h("span", { class: "meta" });
+      const modeBtn = h("button", { class: "link" });
+
+      const renderList = () => {
+        const q = filter.toLocaleLowerCase("sv");
+        const shown = q ? words.filter((w) => w.toLocaleLowerCase("sv").includes(q)) : words;
+        count.textContent = `${words.length} ${words.length === 1 ? "post" : "poster"}`;
+        const list = h("ul", { class: "list dict" });
+        if (!shown.length) {
+          list.append(
+            h(
+              "li",
+              { class: "empty" },
+              words.length
+                ? "Inget matchar sökningen."
+                : "Ordlistan är tom. Högerklicka på ett understruket ord – eller markera flera ord – för att lägga till.",
+            ),
+          );
         }
+        for (const w of shown) {
+          const li = h("li", {});
+          const label = h(
+            "button",
+            { class: "item editable", title: "Klicka för att redigera" },
+            h("span", {}, w),
+            w.includes(" ") ? h("span", { class: "tag" }, "fras") : null,
+          );
+          const startEdit = () => {
+            const input = h("input", { type: "text", value: w, "aria-label": `Redigera ${w}` }) as HTMLInputElement;
+            let done = false;
+            const save = async () => {
+              if (done) return;
+              done = true;
+              const next = input.value.trim().split(/\s+/).join(" ");
+              if (!next || next === w) return renderList();
+              try {
+                apply((await api.dictionaryRename(w, next)).words);
+                renderList();
+              } catch (e) {
+                done = false;
+                toast(errorText(e));
+                input.focus();
+              }
+            };
+            input.addEventListener("keydown", (e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void save();
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                e.stopPropagation();
+                done = true;
+                renderList();
+              }
+            });
+            input.addEventListener("blur", () => void save());
+            li.replaceChildren(input);
+            input.focus();
+            input.select();
+          };
+          label.addEventListener("click", startEdit);
+          li.append(
+            label,
+            h(
+              "button",
+              {
+                class: "icon",
+                title: `Ta bort ”${w}”`,
+                "aria-label": `Ta bort ${w}`,
+                onclick: async () => {
+                  apply((await api.dictionaryRemove(w)).words);
+                  renderList();
+                },
+              },
+              "×",
+            ),
+          );
+          list.append(li);
+        }
+
+        const search = h("input", {
+          type: "search",
+          placeholder: "Sök i ordlistan",
+          "aria-label": "Sök i ordlistan",
+          value: filter,
+          oninput: (e: Event) => {
+            filter = (e.target as HTMLInputElement).value;
+            const pos = (e.target as HTMLInputElement).selectionStart;
+            renderList();
+            const again = body.querySelector<HTMLInputElement>("input[type=search]");
+            again?.focus();
+            if (pos !== null) again?.setSelectionRange(pos, pos);
+          },
+        }) as HTMLInputElement;
+
+        const addInput = h("input", {
+          type: "text",
+          placeholder: "Nytt ord eller fras, t.ex. open source",
+          "aria-label": "Nytt ord eller fras",
+        }) as HTMLInputElement;
+        const form = h("form", { class: "dict-add" }, addInput, h("button", { type: "submit" }, "Lägg till"));
+        form.addEventListener("submit", async (e) => {
+          e.preventDefault();
+          const entry = addInput.value.trim().split(/\s+/).join(" ");
+          if (!entry) return;
+          try {
+            apply((await api.dictionaryAdd(entry)).words);
+            filter = "";
+            renderList();
+            body.querySelector<HTMLInputElement>(".dict-add input")?.focus();
+          } catch (err) {
+            toast(errorText(err));
+          }
+        });
+
+        body.replaceChildren(form, words.length > 8 ? search : "", list);
+        modeBtn.textContent = "Redigera som text …";
+      };
+
+      const renderText = () => {
+        const ta = h("textarea", {
+          class: "dict-text",
+          rows: 14,
+          spellcheck: "false",
+          "aria-label": "Egen ordlista, en post per rad",
+        }) as HTMLTextAreaElement;
+        ta.value = words.join("\n");
+        const saveBtn = h(
+          "button",
+          {
+            class: "primary",
+            onclick: async () => {
+              try {
+                apply((await api.dictionaryReplace(ta.value.split("\n"))).words);
+                textMode = false;
+                render();
+                toast("Ordlistan är sparad");
+              } catch (e) {
+                toast(errorText(e));
+              }
+            },
+          },
+          "Spara listan",
+        );
+        body.replaceChildren(
+          h("p", { class: "meta" }, "En post per rad. Ett ord eller en fras på högst sex ord. Tomma rader ignoreras."),
+          ta,
+          h("div", { class: "actions" }, h("button", { onclick: () => ((textMode = false), render()) }, "Avbryt"), saveBtn),
+        );
+        modeBtn.textContent = "Visa som lista";
+        ta.focus();
+      };
+
+      const render = () => (textMode ? renderText() : renderList());
+      modeBtn.addEventListener("click", () => {
+        textMode = !textMode;
+        render();
       });
+      render();
+
       return h(
         "div",
-        {},
-        h("h2", {}, "Egen ordlista"),
+        { class: "dict-modal" },
+        h("div", { class: "dict-head" }, h("h2", {}, "Egen ordlista"), count),
         h(
           "p",
           { class: "meta" },
-          "Ord här godkänns av stavningskontrollen. En fras (t.ex. ”open source”) godkänns bara när orden står tillsammans – ”open” ensamt räknas fortfarande som stavfel. Listan sparas i datamappen (.wordwork/ordlista.txt).",
+          "Ord här godkänns av stavningskontrollen. En fras (t.ex. ”open source”) godkänns bara när orden står tillsammans. Klicka på en post för att ändra den. Listan sparas i datamappen (.wordwork/ordlista.txt) och kan också redigeras där.",
         ),
-        form,
-        list,
-        h("div", { class: "actions" }, h("button", { class: "primary", onclick: close }, "Klar")),
+        body,
+        h("div", { class: "actions" }, modeBtn, h("span", { class: "spacer" }), h("button", { class: "primary", onclick: close }, "Klar")),
       );
     });
   }
