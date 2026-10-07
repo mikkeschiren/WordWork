@@ -25,6 +25,7 @@ WW_DATA_PATH=~/Dokument/Texter docker compose up -d
 - **Skriv / Markdown.** Växla vy med knapparna högst upp eller med ⌘/ (Ctrl+/ i Windows och Linux).
   - I Skriv-vyn ser du formateringen: rubriker, fetstil, kursiv, citat och listor.
   - I Markdown-vyn ser du källtexten.
+- **Metadata** kan ligga som YAML-frontmatter (`---` … `---`) först i filen. Den visas och redigeras i Markdown-vyn, döljs i Skriv-vyn och räknas inte i ord eller analys.
 - **Allt är Markdown.** Endast formatering som Markdown kan uttrycka går att använda. Det finns inga typsnitt, färger eller understrykningar i själva texten. Klistrar du in formaterad text rensas sådant bort.
 - **Typsnitt och tema** väljs under *Utseende* och gäller alltid hela texten. Du kan också ställa in storlek, radavstånd, textbredd, dimning av andra stycken och skrivmaskinsläge.
 - **Autospar** sker strax efter att du slutat skriva.

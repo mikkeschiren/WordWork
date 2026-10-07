@@ -119,3 +119,14 @@ def test_bad_version_id(client):
     client.post("/api/documents", json={"name": "D"})
     assert client.get("/api/documents/D/history/../../x").status_code == 404
     assert client.get("/api/documents/D/history/nope").status_code == 404
+
+
+def test_frontmatter_not_counted_and_preserved(client, tmp_path):
+    from app.storage import split_frontmatter
+
+    text = "---\ntitel: Hamlet på Dramaten\nförfattare: Mikke\n---\n\nTre ord här.\n"
+    client.post("/api/documents", json={"name": "FM", "content": text})
+    assert client.get("/api/documents").json()[0]["words"] == 3
+    assert (tmp_path / "FM.md").read_text() == text
+    assert split_frontmatter("---\n\nText\n\n---\n")[0] == ""  # avgränsningslinje, inte frontmatter
+    assert split_frontmatter("---\na: 1\n...\nText")[1] == "Text"

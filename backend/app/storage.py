@@ -38,8 +38,20 @@ class Conflict(StorageError):
     status = 409
 
 
+# YAML-frontmatter i början av filen (samma regel som i frontend och Pandoc).
+_FRONTMATTER = re.compile(
+    r"\A\ufeff?---[ \t]*\r?\n(?![ \t]*\r?\n)(?:[\s\S]*?\r?\n)?(?:---|\.\.\.)[ \t]*(?:\r?\n|\Z)"
+)
+
+
+def split_frontmatter(text: str) -> tuple[str, str]:
+    m = _FRONTMATTER.match(text)
+    return (m.group(0), text[m.end():]) if m else ("", text)
+
+
 def count_words(text: str) -> int:
-    return len(_WORD.findall(text))
+    """Räknar ord i brödtexten (frontmatter räknas inte)."""
+    return len(_WORD.findall(split_frontmatter(text)[1]))
 
 
 def validate_name(name: str) -> str:

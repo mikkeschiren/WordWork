@@ -94,7 +94,8 @@ export class DocEditor {
 
   getMarkdown(): string {
     if (this.wysiwygDirty && this.editor) {
-      this.markdown = normalize(this.editor.getMarkdown());
+      // Frontmatter visas inte i Skriv-vyn och sätts tillbaka orört.
+      this.markdown = splitFrontmatter(this.markdown).frontmatter + normalize(this.editor.getMarkdown());
       this.wysiwygDirty = false;
     }
     return this.markdown;
@@ -116,7 +117,7 @@ export class DocEditor {
   /** Löptext utan Markdown-syntax (stycken åtskilda av tomrad). */
   getPlainText(): string {
     if (this.editor) return this.editor.getText({ blockSeparator: "\n\n" });
-    return stripMarkdown(this.markdown);
+    return stripMarkdown(splitFrontmatter(this.markdown).body);
   }
 
   /** Markerad text i Skriv-vyn (tom sträng om inget är markerat). */
@@ -208,7 +209,7 @@ export class DocEditor {
         spellExtension(this.opts.spell),
         WordHighlight,
       ],
-      content: this.markdown,
+      content: splitFrontmatter(this.markdown).body,
       contentType: "markdown",
       editorProps: {
         // Egen stavningskontroll i Skriv-vyn; webbläsarens används i Markdown-vyn.
@@ -278,4 +279,17 @@ export function stripMarkdown(md: string): string {
     .replace(/^\s*(?:[-*+]|\d+\.)\s+/gm, "")
     .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
     .replace(/[*_~`]/g, "");
+}
+
+/**
+ * YAML-frontmatter i början av filen (--- … --- eller --- … ...), inklusive
+ * tomraderna efter. Den redigeras inte i Skriv-vyn utan bevaras exakt.
+ * Som i Pandoc får raden efter inledande --- inte vara tom (då är det en avgränsningslinje).
+ */
+const FRONTMATTER_RE = /^\uFEFF?---[ \t]*\r?\n(?![ \t]*\r?\n)(?:[\s\S]*?\r?\n)?(?:---|\.\.\.)[ \t]*(?:\r?\n|$)(?:[ \t]*\r?\n)*/;
+
+export function splitFrontmatter(md: string): { frontmatter: string; body: string } {
+  const m = FRONTMATTER_RE.exec(md);
+  if (!m) return { frontmatter: "", body: md };
+  return { frontmatter: m[0], body: md.slice(m[0].length) };
 }
