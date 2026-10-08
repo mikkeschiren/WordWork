@@ -110,6 +110,7 @@ Texterna sparas som vanliga Markdown-filer i mappen `./data` bredvid projektet. 
   - AI:n **föreslår men skriver aldrig i texten**. Det finns ingen knapp som infogar AI-text, och svaren visas bara i panelen.
   - Snabbval: granska språket, hitta upprepningar, stramare text, struktur och dramaturgi, fakta att kontrollera. Du kan också ställa egna frågor och följdfrågor.
   - Markera minst några ord för att frågan ska gälla just det avsnittet.
+  - AI:n får veta att texten är Markdown: `*kursiv*`, `**fet**`, `#` och så vidare är formatering, inte fel. Den får också några grundregler ur Svenska skrivregler, till exempel att punkten står före det avslutande citattecknet när citatet är en hel mening. Metadata (rubrik, ingress, längdmål) skickas med för sig, och egna anteckningar räknas som bakgrund, inte som text att granska.
   - Citat i svaren som finns i texten är klickbara och markerar stället i texten.
   - *Tänk efter först* låter modellen resonera innan den svarar. Det ger träffsäkrare svar men tar längre tid. Resonemanget kan visas.
   - Modell väljs i panelen. Listan hämtas från Ollama-servern.

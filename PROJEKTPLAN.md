@@ -293,4 +293,11 @@ Baserad på `PLAN.md`. Målet är en distraktionsfri ordbehandlare för kulturjo
   - Export-mallarna är omgjorda så att de inte bygger på Pandocs GPL-licensierade referensdokument. DOCX utgår från python-docx tomma dokument (MIT), och ODT byggs från grunden. Standardmallen är nu Cambria 12 p med rubriker i Calibri.
   - Kontrollerat genom att konvertera till PDF med LibreOffice: A4, sidnummer, kapitelbrytning, titel, författare, fotnoter och citat fungerar i alla tre mallarna och båda formaten.
   - Pandoc (GPL) körs som separat program. Den som sprider imagen ska låta licenstexten och källkodslänken följa med, och det gör de i `/app/licenses/`.
+- **Version 1.7.1 (2026-10-08) – AI:n och Markdown:**
+  - Problem: "Granska språket" kommenterade stjärnorna i `*kursiv*` som typografifel. Den påstod också felaktigt att punkten ska stå utanför citattecknet när citatet är en hel mening.
+  - Systemprompten förklarar nu Markdown-tecknen och säger åt AI:n att aldrig kommentera dem och att citera utan dem.
+  - Anteckningar (`<!-- … -->`) räknas som bakgrund.
+  - Grundregler ur Svenska skrivregler: citattecken, punkt och citattecken, tankstreck.
+  - Frontmatter skickas nu som ett eget `<metadata>`-block, så att ingress och längdmål kan användas som underlag. Tidigare skickades den inte alls, trots att metadatapanelen sa att ingressen var underlag för AI:n.
+  - Klickbara citat hittas även när AI:n råkar ta med Markdown-tecken i citatet.
 - **Kvar efter v1 (förslag):** utvärdering av gemma4 för bättre svenska, CI-arbetsflöde (`.github/` kunde inte skrivas härifrån).

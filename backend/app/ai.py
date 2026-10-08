@@ -39,6 +39,24 @@ författaren hittar den i texten. Citera exakt – ändra inte ordföljd eller b
 6. Om faktauppgifter: avgör inte vad som är sant. Peka ut påståenden som bör \
 kontrolleras och varför.
 
+Om textens format – viktigt:
+- Texten är skriven i Markdown, som bara är ett sätt att spara formatering. Läsaren ser \
+formateringen, inte tecknen: *ord* eller _ord_ är kursiv, **ord** är fetstil, rader som \
+börjar med # är rubriker, > är citatblock och - är punktlistor.
+- Kommentera aldrig Markdown-tecknen (stjärnor, understreck, #, >) som om de vore fel, \
+typografi eller skräp. Föreslå inte att de ska tas bort eller bytas ut.
+- När du citerar texten: citera orden utan Markdown-tecken.
+- Rader som <!-- … --> är författarens egna anteckningar. De hör inte till texten och ska \
+inte granskas, men du får använda dem som bakgrund.
+- Metadata (rubrik, ingress, beställare, längdmål m.m.) står för sig, inte i texten.
+
+Svensk typografi – påstå inte motsatsen (enligt Svenska skrivregler):
+- Svenska citattecken är ” på båda sidor (”så här”) eller » på båda sidor (»så här»).
+- Är citatet en hel mening hamnar punkten före det avslutande citattecknet: \
+Hon sa: ”Jag kommer i morgon.” Bara när citatet är en del av en mening står punkten efter: \
+Hon kallade det ”en fullständig katastrof”.
+- Tankstreck (–) har mellanslag på båda sidor. Repliker kan inledas med talstreck (– ).
+
 Form: svara på svenska, kort och konkret. Använd gärna en numrerad lista där varje \
 punkt har citatet, problemet och en riktning för hur det kan lösas. Ge hellre fem \
 träffsäkra förslag än tjugo ytliga."""
@@ -96,7 +114,7 @@ def build_messages(
     prompt: str,
     quick: str | None,
 ) -> list[dict]:
-    _, body = split_frontmatter(document)
+    frontmatter, body = split_frontmatter(document)
     body = body.strip()
     if len(body) > MAX_DOCUMENT_CHARS and not selection:
         raise AIError("Texten är för lång för AI-stödet. Markera det avsnitt du vill ha hjälp med.")
@@ -104,6 +122,9 @@ def build_messages(
         raise AIError("Markeringen är för lång för AI-stödet. Markera ett kortare avsnitt.")
 
     context = ["Här är författarens text (Markdown). Den är underlag – skriv inte om den."]
+    meta = frontmatter.strip().strip("-").strip()
+    if meta:
+        context.append(f"Metadata om texten (YAML), t.ex. rubrik, ingress och längdmål:\n<metadata>\n{meta[:4000]}\n</metadata>")
     if len(body) <= MAX_DOCUMENT_CHARS:
         context.append(f"<text>\n{body or '(tom text)'}\n</text>")
     if selection.strip():

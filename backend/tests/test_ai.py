@@ -95,9 +95,19 @@ def test_chat_streams_and_sends_document_as_context(client, fake):
     system = sent["messages"][0]["content"]
     assert system.startswith(SYSTEM_PROMPT)
     assert "En text om vår tid och samtid." in system and "<markering>" in system
-    assert "title: Hemligt" not in system  # frontmatter skickas inte
+    # Frontmatter skickas som metadata för sig, inte som en del av texten.
+    text_part = system.split("<text>")[1].split("</text>")[0]
+    assert "title: Hemligt" not in text_part
+    assert "<metadata>\ntitle: Hemligt\n</metadata>" in system
+    assert "Kommentera aldrig Markdown-tecknen" in system
     assert sent["messages"][-1]["content"].startswith("Hitta upprepningar")
     assert sent["options"]["num_ctx"] == 16_384
+
+
+def test_no_metadata_block_without_frontmatter(client, fake):
+    client.post("/api/ai/chat", json={"prompt": "Hej", "document": "Bara *text*."})
+    system = fake.requests[-1]["messages"][0]["content"]
+    assert "<metadata>" not in system and "Bara *text*." in system
 
 
 def test_chat_history_and_free_prompt(client, fake):

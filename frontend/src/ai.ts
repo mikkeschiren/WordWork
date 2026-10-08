@@ -592,7 +592,8 @@ export class AIPanel {
       const frag = document.createDocumentFragment();
       let changed = false;
       for (const m of text.matchAll(QUOTE_RE)) {
-        const phrase = normalizeSpace(m[1].replace(/^[.…]+|[.…]+$/g, ""));
+        // Markdown-tecken (*kursiv*, **fet**) finns inte i den synliga texten.
+        const phrase = normalizeSpace(m[1].replace(/\*{1,2}|(?<!\p{L})_|_(?!\p{L})/gu, "").replace(/^[.…]+|[.…]+$/g, ""));
         if (phrase.length < 2 || !plain.includes(phrase)) continue;
         frag.append(text.slice(last, m.index));
         const btn = h(
