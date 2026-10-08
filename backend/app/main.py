@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from . import __version__
 from .ai import QUICK_PROMPTS, AIError, OllamaClient, build_messages, context_size, is_external
 from .config import Settings
-from .convert import EXPORT_FORMATS, MAX_IMPORT_BYTES, TEMPLATE_LABELS, ConvertError, export_document, import_file
+from .convert import EXPORT_FORMATS, MAX_IMPORT_BYTES, PAGED_FORMATS, TEMPLATE_LABELS, ConvertError, export_document, import_file
 from .language import Language, normalize_entry
 from .storage import (
     SettingsStore,
@@ -401,15 +401,16 @@ def create_app(settings: Settings | None = None, ai_transport: httpx.AsyncBaseTr
     def export_formats() -> dict:
         return {
             "formats": [
-                {"key": f.key, "label": f.label, "templates": f.templates} for f in EXPORT_FORMATS.values()
+                {"key": f.key, "label": f.label, "templates": f.templates, "pages": f.key in PAGED_FORMATS}
+                for f in EXPORT_FORMATS.values()
             ],
             "templates": [{"key": k, "label": v} for k, v in TEMPLATE_LABELS.items()],
         }
 
     @app.get("/api/documents/{name}/export")
-    def export_doc(name: str, format: str = "docx", template: str = "standard") -> Response:
+    def export_doc(name: str, format: str = "docx", template: str = "standard", chapters: int = 0) -> Response:
         content, _ = storage.read(name)
-        data, fmt = export_document(name, content, format, template)
+        data, fmt = export_document(name, content, format, template, chapters)
         filename = f"{name}.{fmt.ext}"
         ascii_name = filename.encode("ascii", "replace").decode().replace("?", "_").replace('"', "")
         return Response(

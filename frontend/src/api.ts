@@ -27,7 +27,7 @@ export interface SynonymGroup {
 }
 
 export interface ExportOptions {
-  formats: { key: string; label: string; templates: boolean }[];
+  formats: { key: string; label: string; templates: boolean; pages?: boolean }[];
   templates: { key: string; label: string }[];
 }
 
@@ -203,8 +203,9 @@ export const api = {
       `/synonyms?word=${encodeURIComponent(word)}`,
     ),
   exportOptions: () => request<ExportOptions>("GET", "/export/formats"),
-  exportUrl: (name: string, format: string, template: string) =>
-    `/api${doc(name)}/export?format=${encodeURIComponent(format)}&template=${encodeURIComponent(template)}`,
+  exportUrl: (name: string, format: string, template: string, chapters = 0) =>
+    `/api${doc(name)}/export?format=${encodeURIComponent(format)}&template=${encodeURIComponent(template)}` +
+    (chapters ? `&chapters=${chapters}` : ""),
   importFile: (file: File) =>
     request<DocumentInfo>("POST", `/import?filename=${encodeURIComponent(file.name)}`, file),
   aiStatus: () => request<AIStatus>("GET", "/ai/status"),

@@ -17,6 +17,8 @@ import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet, type EditorView } from "@tiptap/pm/view";
 import { TextSelection } from "@tiptap/pm/state";
 import { setHighlight, spellExtension, WordHighlight, type SpellService } from "./spell";
+import { Note, stripNotes } from "./notes";
+import { LongSentences, setLongSentences } from "./longsentences";
 import { typographyExtension, type TypographyOptions } from "./typography";
 import {
   buildRegExp,
@@ -108,6 +110,7 @@ export class DocEditor {
   typewriter = false;
   /** Aktiv sökning (gäller båda vyerna). */
   private searchRe: RegExp | null = null;
+  private longSentenceLimit = 0;
   private srcMatches: Range[] = [];
   private srcCurrent = -1;
 
@@ -161,10 +164,57 @@ export class DocEditor {
     else this.sourceEl.focus();
   }
 
-  /** Löptext utan Markdown-syntax (stycken åtskilda av tomrad). */
+  /** Löptext utan Markdown-syntax (stycken åtskilda av tomrad). Egna anteckningar räknas inte. */
   getPlainText(): string {
-    if (this.editor) return this.editor.getText({ blockSeparator: "\n\n" });
-    return stripMarkdown(splitFrontmatter(this.markdown).body);
+    if (this.editor) {
+      const blocks: string[] = [];
+      this.editor.state.doc.descendants((node) => {
+        if (node.type.name === "note") return false;
+        if (!node.isTextblock) return true;
+        blocks.push(node.textBetween(0, node.content.size, "\n", (leaf) => (leaf.type.name === "hardBreak" ? "\n" : "")));
+        return false;
+      });
+      return blocks.join("\n\n");
+    }
+    return stripMarkdown(stripNotes(splitFrontmatter(this.markdown).body));
+  }
+
+  /** Frontmatter (tom sträng om den saknas). */
+  getFrontmatter(): string {
+    return splitFrontmatter(this.getMarkdown()).frontmatter;
+  }
+
+  /** Byter frontmatter utan att röra texten (metadatapanelen). */
+  setFrontmatter(frontmatter: string): void {
+    const md = this.getMarkdown();
+    const { frontmatter: old, body } = splitFrontmatter(md);
+    if (old === frontmatter) return;
+    this.markdown = frontmatter + body;
+    if (this.mode === "markdown") {
+      const ta = this.sourceEl;
+      const delta = frontmatter.length - old.length;
+      const [start, end] = [ta.selectionStart ?? 0, ta.selectionEnd ?? 0];
+      ta.value = this.markdown;
+      ta.setSelectionRange(Math.max(0, start + delta), Math.max(0, end + delta));
+      this.autoGrow();
+    }
+    this.emitChange();
+  }
+
+  /** Gör aktuellt stycke till en egen anteckning (eller tillbaka). */
+  toggleNote(): boolean {
+    if (!this.editor) return false;
+    const { $from } = this.editor.state.selection;
+    const inNote = $from.parent.type.name === "note";
+    return inNote
+      ? this.editor.chain().focus().setParagraph().run()
+      : this.editor.chain().focus().setNode("note").run();
+  }
+
+  /** Markera meningar som är längre än gränsen (0 = av). */
+  markLongSentences(limit: number): void {
+    this.longSentenceLimit = limit;
+    if (this.editor) setLongSentences(this.editor.view, limit);
   }
 
   /** Markerad text i aktuell vy (för att fylla i sökfältet). */
@@ -277,6 +327,7 @@ export class DocEditor {
       this.autoGrow();
     }
     if (this.searchRe) this.applySearch();
+    if (this.mode === "write" && this.editor && this.longSentenceLimit) setLongSentences(this.editor.view, this.longSentenceLimit);
   }
 
   // ---------------- sök och ersätt ----------------
@@ -390,6 +441,8 @@ export class DocEditor {
         typographyExtension(this.opts.typography),
         WordHighlight,
         SearchHighlight,
+        Note,
+        LongSentences,
       ],
       content: splitFrontmatter(this.markdown).body,
       contentType: "markdown",

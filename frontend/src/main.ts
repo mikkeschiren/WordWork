@@ -17,7 +17,7 @@ import { fixTypography, QUOTE_STYLES, type QuoteStyle } from "./typography";
 import { DocEditor, type ViewMode } from "./editor";
 import { renameTracked, trackWords } from "./goal";
 import { SpellService } from "./spell";
-import { analyze, LIX_SCALE, lixLevel, quickStats, type TextStats } from "./stats";
+import { analyze, findQuotes, LIX_SCALE, lixLevel, nominalLevel, nominalStyle, quickStats, type TextStats } from "./stats";
 import {
   applySettings,
   FONTS,
@@ -31,6 +31,19 @@ import {
 } from "./settings";
 import { confirm, formatDate, h, isMod, modKey, prompt, showModal, toast } from "./ui";
 import { SearchBar } from "./searchbar";
+import { iconButton, type IconName } from "./icons";
+import {
+  deadlineText,
+  formatLength,
+  META_FIELDS,
+  metaValue,
+  parseDeadline,
+  parseLength,
+  readMeta,
+  writeMeta,
+  type LengthUnit,
+} from "./frontmatter";
+import { splitFrontmatter } from "./editor";
 import { copyRich, publishContent } from "./publish";
 import { dropLocal, keepLocal, localCopy, type Unsaved } from "./unsaved";
 
@@ -73,23 +86,32 @@ class App {
   private historyDrawer = h("aside", { class: "drawer right", "aria-label": "Versionshistorik" });
   private analysisDrawer = h("aside", { class: "drawer right wide", "aria-label": "Textanalys" });
   private aiDrawer = h("aside", { class: "drawer right wide ai", "aria-label": "AI-assistent" });
-  private aiButton = h("button", { hidden: true, title: `AI-assistent (${modKey}+J)` }, "AI");
+  private aiButton = iconButton(
+    "ai",
+    "AI-assistent",
+    { hidden: true, title: `AI-assistent (${modKey}+J) – Det ser ut som att du skriver en text. Vill du ha hjälp?` },
+  );
+  private metaDrawer = h("aside", { class: "drawer right", "aria-label": "Metadata" });
+  private statusLength = h("span", { class: "status-goal status-length", hidden: true });
+  private statusDeadline = h("span", { class: "status-deadline", hidden: true });
+  /** Frontmatter för aktuellt dokument (uppdateras vid öppning, i metadatapanelen och i Markdown-vyn). */
+  private frontmatter = "";
   private charsPanel = h("div", {
     class: "popover chars",
     id: "panel-chars",
     role: "dialog",
     "aria-label": "Infoga tecken",
   });
-  private charsButton = h(
-    "button",
-    { "aria-controls": "panel-chars", "aria-expanded": "false", title: `Infoga tecken (${modKey}+.)` },
-    "Tecken",
+  private charsButton = iconButton(
+    "chars",
+    "Infoga tecken",
+    { "aria-controls": "panel-chars", "aria-expanded": "false" },
+    `${modKey}+.`,
   );
-  private settingsButton = h(
-    "button",
-    { "aria-controls": "panel-settings", "aria-expanded": "false", title: "Inställningar" },
-    "Inställningar",
-  );
+  private settingsButton = iconButton("settings", "Inställningar", {
+    "aria-controls": "panel-settings",
+    "aria-expanded": "false",
+  });
   private ai: AIPanel;
   private spell = new SpellService();
   private highlighted: string | null = null;
@@ -123,9 +145,11 @@ class App {
           spell: this.spell,
           replace: (from, to, text) => this.editor.replaceRange(from, to, text),
           openChars: () => this.toggleChars(true),
+          toggleNote: () => this.toggleNote(),
         }),
     });
     this.editor.typewriter = this.settings.typewriter;
+    this.applyLongSentences();
     this.searchBar = new SearchBar(this.editor, () => this.editor.focus());
     this.ai = new AIPanel({
       drawer: this.aiDrawer,
@@ -156,18 +180,17 @@ class App {
       this.toggleChars();
     });
 
-    const viewBtn = (mode: ViewMode, label: string) =>
-      h(
-        "button",
-        {
-          class: "seg",
-          "aria-pressed": "false",
-          title: `${label} (${modKey}+/ växlar)`,
-          onclick: () => this.setView(mode),
-        },
+    const viewBtn = (mode: ViewMode, iconName: IconName, label: string) =>
+      iconButton(
+        iconName,
         label,
+        { class: "seg icon-btn", "aria-pressed": "false", onclick: () => this.setView(mode) },
+        `${modKey}+/ växlar`,
       );
-    this.viewBtns = { write: viewBtn("write", "Skriv"), markdown: viewBtn("markdown", "Markdown") };
+    this.viewBtns = {
+      write: viewBtn("write", "write", "Skriv"),
+      markdown: viewBtn("markdown", "markdown", "Markdown"),
+    };
 
     const topbar = h(
       "header",
@@ -175,22 +198,23 @@ class App {
       h(
         "div",
         { class: "group" },
-        this.panelButton(this.docsDrawer, "Dokument", `Dokument (${modKey}+O)`),
-        h("button", { onclick: () => this.newDocument(), title: "Nytt dokument" }, "Nytt"),
-        h("button", { onclick: () => this.showExport(), title: `Exportera eller kopiera för publicering (${modKey}+E)` }, "Exportera"),
-        h("button", { onclick: () => this.searchBar.open(), title: `Sök och ersätt (${modKey}+F)` }, "Sök"),
+        this.panelButton(this.docsDrawer, "dokument", "documents", "Dokument", `${modKey}+O`),
+        iconButton("newDoc", "Nytt dokument", { onclick: () => this.newDocument() }),
+        iconButton("export", "Exportera eller kopiera för publicering", { onclick: () => this.showExport() }, `${modKey}+E`),
+        iconButton("search", "Sök och ersätt", { onclick: () => this.searchBar.open() }, `${modKey}+F`),
       ),
       this.titleBtn,
       h(
         "div",
         { class: "group" },
         h("div", { class: "segmented", role: "group", "aria-label": "Vy" }, ...Object.values(this.viewBtns)),
-        this.panelButton(this.analysisDrawer, "Analys", "Textanalys: LIX, statistik och ordfrekvens"),
+        this.panelButton(this.metaDrawer, "metadata", "metadata", "Metadata: rubrik, byline, deadline och längdmål"),
+        this.panelButton(this.analysisDrawer, "analys", "analysis", "Analys: LIX, statistik, citat och ordfrekvens"),
         this.aiButton,
-        this.panelButton(this.historyDrawer, "Historik", "Versionshistorik"),
+        this.panelButton(this.historyDrawer, "historik", "history", "Versionshistorik"),
         this.charsButton,
         this.settingsButton,
-        h("button", { onclick: () => this.toggleFullscreen(), title: "Helskärm" }, "Helskärm"),
+        iconButton("fullscreen", "Helskärm", { onclick: () => this.toggleFullscreen() }),
       ),
     );
     this.titleBtn.addEventListener("click", () => this.renameCurrent());
@@ -202,6 +226,8 @@ class App {
       this.statusWords,
       this.statusChars,
       this.statusLix,
+      this.statusLength,
+      this.statusDeadline,
       this.statusGoal,
       this.statusSave,
     );
@@ -217,6 +243,7 @@ class App {
       this.historyDrawer,
       this.analysisDrawer,
       this.aiDrawer,
+      this.metaDrawer,
       this.settingsPanel,
       this.charsPanel,
     );
@@ -266,6 +293,7 @@ class App {
     const s = this.settings;
     applySettings(s);
     this.editor.typewriter = s.typewriter;
+    this.applyLongSentences();
     if (this.spell.enabled !== s.spellcheck) {
       this.spell.enabled = s.spellcheck;
       this.spell.changed();
@@ -280,6 +308,7 @@ class App {
     if (this.current?.name !== doc.name) this.ai?.reset();
     this.current = { name: doc.name, modified: doc.modified };
     this.lastSaved = doc.content;
+    this.frontmatter = splitFrontmatter(doc.content).frontmatter;
     this.editor.load(doc.content);
     this.setSaveState("saved");
     this.updateTitle();
@@ -562,6 +591,8 @@ class App {
   // ---------------- vy & statistik ----------------
   private setView(mode: ViewMode, focus = true): void {
     this.editor.setMode(mode);
+    this.frontmatter = this.editor.getFrontmatter();
+    if (this.metaDrawer.classList.contains("open")) this.renderMeta();
     this.searchBar.rerun();
     for (const [m, btn] of Object.entries(this.viewBtns)) {
       btn.setAttribute("aria-pressed", String(m === mode));
@@ -588,7 +619,149 @@ class App {
     this.statusLix.title =
       stats.lix === null ? "Läsbarhet" : `Läsbarhet: ${lixLevel(stats.lix).label.toLowerCase()} – öppna analys`;
     this.updateGoal(stats.words);
+    if (this.editor.mode === "markdown") this.frontmatter = splitFrontmatter(this.editor.getMarkdown()).frontmatter;
+    this.updateTargets(stats.words, stats.chars);
     this.scheduleAnalysis();
+  }
+
+  /** Längdmål och deadline från frontmattern, i statusraden. */
+  private updateTargets(words: number, chars: number): void {
+    const target = parseLength(metaValue(this.frontmatter, "length"));
+    this.statusLength.hidden = !target;
+    if (target) {
+      const have = target.unit === "ord" ? words : chars;
+      const pct = Math.round((have / target.amount) * 100);
+      this.statusLength.replaceChildren(
+        h("span", { class: "goal-bar", "aria-hidden": "true" }, h("i", { style: `width:${Math.min(100, pct)}%` })),
+        `${have.toLocaleString("sv-SE")} / ${target.amount.toLocaleString("sv-SE")} ${target.unit}`,
+      );
+      this.statusLength.classList.toggle("done", pct >= 95 && pct <= 105);
+      this.statusLength.classList.toggle("over", pct > 105);
+      this.statusLength.title =
+        pct > 105
+          ? `${(have - target.amount).toLocaleString("sv-SE")} ${target.unit} för långt (längdmål i Metadata)`
+          : `${pct} % av längdmålet (Metadata)`;
+    }
+    const deadline = parseDeadline(metaValue(this.frontmatter, "deadline"));
+    this.statusDeadline.hidden = !deadline;
+    if (deadline) {
+      const d = deadlineText(deadline);
+      this.statusDeadline.textContent = `Deadline ${d.text}`;
+      this.statusDeadline.dataset.level = d.level;
+      this.statusDeadline.title = deadline.toLocaleString("sv-SE", { dateStyle: "full", timeStyle: "short" });
+    }
+  }
+
+  // ---------------- metadata ----------------
+  private metaTimer: number | undefined;
+
+  private setMeta(key: string, value: string): void {
+    const next = writeMeta(this.frontmatter, key, value);
+    if (next === this.frontmatter) return;
+    this.frontmatter = next;
+    this.editor.setFrontmatter(next);
+    this.updateStats();
+  }
+
+  private renderMeta(): void {
+    const fm = this.frontmatter;
+    const fields = readMeta(fm);
+    const field = (key: string) => fields.find((f) => f.key === key);
+    const queue = (key: string, value: () => string) => {
+      window.clearTimeout(this.metaTimer);
+      this.metaTimer = window.setTimeout(() => this.setMeta(key, value()), 350);
+    };
+    const flushMeta = (key: string, value: () => string) => {
+      window.clearTimeout(this.metaTimer);
+      this.setMeta(key, value());
+    };
+    const textField = (key: string, label: string, hint: string, multiline = false) => {
+      const f = field(key);
+      const input = h(multiline ? "textarea" : "input", {
+        ...(multiline ? { rows: 3 } : { type: "text" }),
+        value: f && !f.complex ? f.value : "",
+        disabled: !!f?.complex,
+        spellcheck: "true",
+        lang: "sv",
+      }) as HTMLInputElement;
+      if (multiline) (input as unknown as HTMLTextAreaElement).value = f && !f.complex ? f.value : "";
+      input.addEventListener("input", () => queue(key, () => input.value));
+      input.addEventListener("change", () => flushMeta(key, () => input.value));
+      return h(
+        "label",
+        { class: "field meta-field" },
+        h("span", {}, label),
+        input,
+        h("small", { class: "meta" }, f?.complex ? "Flera värden – redigera i Markdown-vyn." : hint),
+      );
+    };
+
+    // Deadline
+    const dl = h("input", { type: "date", value: (metaValue(fm, "deadline").match(/^\d{4}-\d{2}-\d{2}/) ?? [""])[0] }) as HTMLInputElement;
+    const dlInfo = h("small", { class: "meta" });
+    const showDl = () => {
+      const d = parseDeadline(dl.value);
+      dlInfo.textContent = d ? `Deadline ${deadlineText(d).text}.` : "Visas i statusraden när den närmar sig.";
+    };
+    showDl();
+    dl.addEventListener("change", () => {
+      flushMeta("deadline", () => dl.value);
+      showDl();
+    });
+
+    // Längdmål
+    const target = parseLength(metaValue(fm, "length"));
+    const amount = h("input", { type: "number", min: "0", step: "100", value: target ? String(target.amount) : "", "aria-label": "Längdmål" }) as HTMLInputElement;
+    const unit = h("select", { "aria-label": "Enhet" }) as HTMLSelectElement;
+    for (const [v, l] of [["tecken", "tecken inkl. blanksteg"], ["ord", "ord"]] as const) {
+      unit.append(h("option", { value: v, selected: (target?.unit ?? "tecken") === v }, l));
+    }
+    const lengthValue = () => {
+      const n = Math.round(Number(amount.value));
+      return n > 0 ? formatLength({ amount: n, unit: unit.value as LengthUnit }) : "";
+    };
+    amount.addEventListener("input", () => queue("length", lengthValue));
+    amount.addEventListener("change", () => flushMeta("length", lengthValue));
+    unit.addEventListener("change", () => flushMeta("length", lengthValue));
+
+    const others = fields.filter((f) => !(META_FIELDS as readonly string[]).includes(f.key));
+    this.metaDrawer.replaceChildren(
+      h("div", { class: "drawer-head" }, this.closeButton(), h("h2", {}, "Metadata")),
+      h(
+        "p",
+        { class: "meta" },
+        "Sparas som frontmatter först i filen. Syns inte i Skriv-vyn och räknas inte i ord eller tecken.",
+      ),
+      h(
+        "div",
+        { class: "meta-form" },
+        textField("title", "Rubrik", "Blir dokumenttitel vid export till Word, OpenDocument och HTML."),
+        textField("lead", "Ingress", "För planering och AI-assistenten – följer inte med som text.", true),
+        textField("author", "Byline", "Författare i dokumentegenskaperna vid export."),
+        textField("client", "Beställare", "Till exempel redaktion eller publikation."),
+        h("label", { class: "field meta-field" }, h("span", {}, "Deadline"), dl, dlInfo),
+        h(
+          "div",
+          { class: "field meta-field" },
+          h("span", {}, "Längdmål"),
+          h("div", { class: "row" }, amount, unit),
+          h("small", { class: "meta" }, "Visas som en mätare i statusraden."),
+        ),
+      ),
+      others.length
+        ? h(
+            "section",
+            { class: "meta-others" },
+            h("h3", {}, "Övriga fält"),
+            h(
+              "dl",
+              {},
+              ...others.flatMap((f) => [h("dt", {}, f.key), h("dd", {}, f.complex ? "(flera värden)" : f.value || "–")]),
+            ),
+            h("p", { class: "meta" }, `Redigeras i Markdown-vyn (${modKey}+/).`),
+          )
+        : "",
+    );
   }
 
   private updateGoal(words: number): void {
@@ -618,6 +791,7 @@ class App {
       [`${modKey}+E`, "Exportera"],
       [`${modKey}+Shift+C`, "Kopiera texten för publicering (HTML och ren text)"],
       [`${modKey}+F / ${modKey}+Alt+F`, "Sök / sök och ersätt"],
+      [`${modKey}+Alt+M`, "Gör stycket till en egen anteckning (följer inte med vid export)"],
       [`Enter / Shift+Enter, ${modKey}+G`, "Nästa / föregående träff"],
       [`${modKey}+J`, "AI-assistent"],
       [`${modKey}+.`, "Infoga tecken (citattecken, tankstreck m.m.)"],
@@ -653,17 +827,13 @@ class App {
 
   // ---------------- lådor & paneler ----------------
   /** Knapp som öppnar/stänger en låda, med aria-expanded/aria-controls. */
-  private panelButton(drawer: HTMLElement, label: string, title: string): HTMLButtonElement {
-    drawer.id ||= `panel-${label.toLowerCase().replace(/[^a-zåäö]+/g, "-")}`;
-    return h(
-      "button",
-      {
-        onclick: () => this.toggleDrawer(drawer),
-        title,
-        "aria-controls": drawer.id,
-        "aria-expanded": "false",
-      },
+  private panelButton(drawer: HTMLElement, key: string, iconName: IconName, label: string, shortcut = ""): HTMLButtonElement {
+    drawer.id ||= `panel-${key}`;
+    return iconButton(
+      iconName,
       label,
+      { onclick: () => this.toggleDrawer(drawer), "aria-controls": drawer.id, "aria-expanded": "false" },
+      shortcut,
     );
   }
 
@@ -685,6 +855,7 @@ class App {
       if (drawer === this.docsDrawer) ready = this.renderDocs();
       else if (drawer === this.analysisDrawer) ready = this.renderAnalysis();
       else if (drawer === this.aiDrawer) ready = this.ai.render().then(() => this.ai.focusInput());
+      else if (drawer === this.metaDrawer) ready = this.renderMeta();
       else ready = this.renderHistory();
       // Flytta fokus in i panelen så att den går att använda med tangentbordet.
       if (drawer !== this.aiDrawer) {
@@ -706,6 +877,7 @@ class App {
     this.docsDrawer.classList.remove("open");
     this.historyDrawer.classList.remove("open");
     this.aiDrawer.classList.remove("open");
+    this.metaDrawer.classList.remove("open");
     this.settingsPanel.classList.remove("open");
     this.charsPanel.classList.remove("open");
     if (this.analysisDrawer.classList.contains("open")) {
@@ -1014,6 +1186,108 @@ class App {
       );
     }
 
+    // Nominalstil
+    const nominal = nominalStyle(text);
+    const nominalList = h("ol", { class: "freq nominal" });
+    const maxNom = nominal.top[0]?.count ?? 1;
+    for (const f of nominal.top) {
+      const active = this.highlighted === f.word;
+      nominalList.append(
+        h(
+          "li",
+          {},
+          h(
+            "button",
+            {
+              class: active ? "active" : "",
+              title: active ? "Ta bort markering" : "Markera i texten",
+              onclick: () => {
+                this.setHighlight(active ? null : f.word);
+                this.renderAnalysis();
+              },
+            },
+            h("span", { class: "bar", style: `width:${(f.count / maxNom) * 100}%` }),
+            h("span", { class: "w" }, f.word),
+            h("span", { class: "c" }, String(f.count)),
+          ),
+        ),
+      );
+    }
+
+    // Långa meningar i texten
+    const longInput = h("input", {
+      type: "number",
+      min: "10",
+      max: "80",
+      value: String(this.settings.longSentenceWords),
+      "aria-label": "Antal ord",
+      class: "tiny",
+      onchange: (e: Event) => {
+        const n = Math.min(80, Math.max(10, Math.round(Number((e.target as HTMLInputElement).value)) || 30));
+        this.settings.longSentenceWords = n;
+        saveSettings(this.settings);
+        this.applyLongSentences();
+      },
+    });
+    const longToggle = h(
+      "label",
+      { class: "check small" },
+      h("input", {
+        type: "checkbox",
+        checked: this.settings.markLongSentences,
+        onchange: (e: Event) => {
+          this.settings.markLongSentences = (e.target as HTMLInputElement).checked;
+          saveSettings(this.settings);
+          this.applyLongSentences();
+          if (this.settings.markLongSentences && this.editor.mode !== "write") toast("Markeringen syns i Skriv-vyn");
+        },
+      }),
+      h("span", {}, "Markera meningar längre än "),
+      longInput,
+      h("span", {}, " ord i texten"),
+    );
+
+    // Citat
+    const quotes = findQuotes(text);
+    const quoteList = h("ol", { class: "quotes" });
+    for (const q of quotes) {
+      quoteList.append(
+        h(
+          "li",
+          {},
+          h(
+            "button",
+            {
+              title: "Visa i texten",
+              onclick: () => {
+                if (this.editor.mode !== "write") this.setView("write", false);
+                if (!this.editor.selectText(q.text)) toast("Hittade inte citatet i texten");
+              },
+            },
+            h("span", { class: "c" }, q.kind === "replik" ? "Replik" : "Citat"),
+            h("span", { class: "t" }, q.text.length > 160 ? `${q.text.slice(0, 160)} …` : q.text),
+          ),
+        ),
+      );
+    }
+    const copyQuotes = h(
+      "button",
+      {
+        class: "link",
+        title: "Kopiera alla citat som en numrerad lista, för avstämning mot källor",
+        onclick: async () => {
+          const list = quotes.map((q, i) => `${i + 1}. ${q.text}`).join("\n");
+          try {
+            await navigator.clipboard.writeText(`${list}\n`);
+            toast(`Kopierade ${quotes.length} citat`);
+          } catch (e) {
+            toast(`Kunde inte kopiera: ${errorText(e)}`);
+          }
+        },
+      },
+      "Kopiera listan",
+    );
+
     const stopToggle = h(
       "label",
       { class: "check small" },
@@ -1069,9 +1343,53 @@ class App {
         {},
         h("h3", {}, "Längsta meningarna"),
         st.longestSentences.length ? sentenceList : h("p", { class: "meta" }, "Inga meningar ännu."),
+        longToggle,
+      ),
+      h(
+        "section",
+        {},
+        h("h3", {}, "Nominalstil"),
+        st.words
+          ? h(
+              "p",
+              { class: "nominal-sum", title: "Substantiv bildade av verb och adjektiv, t.ex. utredning, möjlighet, händelse, information" },
+              h("strong", {}, nf(nominal.per100, 1)),
+              ` substantiveringar per 100 ord – ${nominalLevel(nominal.per100).toLowerCase()}`,
+            )
+          : h("p", { class: "meta" }, "Inga ord ännu."),
+        nominal.top.length ? nominalList : "",
+        h(
+          "p",
+          { class: "meta" },
+          "Ord på -ning, -het, -else, -tion och -itet. Många sådana gör texten tung – skriv om med verb: ”genomförde en utredning” → ”utredde”. Siffran är en grov uppskattning, inte en nominalkvot (den kräver ordklassanalys).",
+        ),
+      ),
+      h(
+        "section",
+        {},
+        h(
+          "div",
+          { class: "section-head" },
+          h("h3", {}, `Citat och repliker${quotes.length ? ` (${quotes.length})` : ""}`),
+          quotes.length ? copyQuotes : "",
+        ),
+        quotes.length
+          ? quoteList
+          : h("p", { class: "meta" }, "Inga citat ännu. Citat inom citattecken (minst tre ord) och stycken som börjar med pratminus listas här."),
       ),
     );
     this.analysisDrawer.scrollTop = scrollTop;
+  }
+
+  /** Egen anteckning: gör om stycket i Skriv-vyn, infoga en kommentar i Markdown-vyn. */
+  private toggleNote(): void {
+    if (this.editor.mode === "write") this.editor.toggleNote();
+    else this.editor.insertText("<!-- anteckning -->");
+  }
+
+  private applyLongSentences(): void {
+    const s = this.settings;
+    this.editor.markLongSentences(s.markLongSentences ? Math.max(10, s.longSentenceWords) : 0);
   }
 
   private closeButton(): HTMLElement {
@@ -1300,6 +1618,7 @@ class App {
     };
     let format = remembered("ww.exportFormat", "docx");
     let template = remembered("ww.exportTemplate", "standard");
+    let chapters = remembered("ww.exportChapters", "0");
     if (!opts.formats.some((f) => f.key === format)) format = opts.formats[0].key;
 
     await showModal((close) => {
@@ -1310,11 +1629,30 @@ class App {
       for (const t of opts.templates) {
         tplSelect.append(h("option", { value: t.key, selected: t.key === template }, t.label));
       }
-      const tplRow = h("label", { class: "field" }, h("span", {}, "Mall"), tplSelect);
+      const tplRow = h("label", { class: "field wide" }, h("span", {}, "Mall"), tplSelect);
+      const chapSelect = h("select", {
+        "aria-label": "Ny sida före kapitel",
+        onchange: (e: Event) => (chapters = (e.target as HTMLSelectElement).value),
+      }) as HTMLSelectElement;
+      for (const [v, l] of [
+        ["0", "Nej"],
+        ["1", "Vid rubriknivå 1 (#)"],
+        ["2", "Vid rubriknivå 2 (##)"],
+      ]) {
+        chapSelect.append(h("option", { value: v, selected: v === chapters }, l));
+      }
+      const chapRow = h(
+        "label",
+        { class: "field wide", title: "Varje kapitelrubrik börjar på en ny sida. Gäller Word, OpenDocument, RTF och utskrift av HTML." },
+        h("span", {}, "Ny sida före kapitel"),
+        chapSelect,
+      );
       const updateTpl = () => {
         const f = opts.formats.find((x) => x.key === format);
         tplSelect.disabled = !f?.templates;
         tplRow.classList.toggle("disabled", !f?.templates);
+        chapSelect.disabled = !f?.pages;
+        chapRow.classList.toggle("disabled", !f?.pages);
       };
       const radios = h(
         "div",
@@ -1344,6 +1682,7 @@ class App {
         h("h2", {}, `Exportera ”${name}”`),
         radios,
         tplRow,
+        chapRow,
         h("p", { class: "meta" }, "Mallen gäller Word och OpenDocument. Titel och författare i frontmatter (title, author) följer med som dokumentegenskaper."),
         h(
           "div",
@@ -1396,11 +1735,13 @@ class App {
                 try {
                   localStorage.setItem("ww.exportFormat", format);
                   localStorage.setItem("ww.exportTemplate", template);
+                  localStorage.setItem("ww.exportChapters", chapters);
                 } catch {
                   /* ignorera */
                 }
                 const tpl = opts.formats.find((x) => x.key === format)?.templates ? template : "standard";
-                void this.download(api.exportUrl(name, format, tpl));
+                const pages = opts.formats.find((x) => x.key === format)?.pages;
+                void this.download(api.exportUrl(name, format, tpl, pages ? Number(chapters) : 0));
                 close();
               },
             },
@@ -1834,6 +2175,9 @@ class App {
           e.preventDefault();
           this.searchBar.step(e.shiftKey ? -1 : 1);
         }
+      } else if (isMod(e) && e.altKey && e.code === "KeyM") {
+        e.preventDefault();
+        this.toggleNote();
       } else if (isMod(e) && e.shiftKey && e.code === "KeyC") {
         e.preventDefault();
         void this.copyForPublishing();

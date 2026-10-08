@@ -145,3 +145,60 @@ def test_a4_rtf_and_html(client):
     assert rb"\paperw11906\paperh16838" in rtf
     html = client.get(url, params={"format": "html"}).text
     assert "size: A4" in html
+
+
+def test_notes_never_exported(client):
+    doc = (
+        "---\ntitle: Krönika\n---\n\n# Krönika\n\nFörsta stycket.\n\n<!-- Kolla siffran med kommunen -->\n\n"
+        "Andra <!-- inne i stycket --> stycket.\n\n<!-- flera\nrader -->\n\n```\n<!-- kod behålls -->\n```\n"
+    )
+    client.post("/api/documents", json={"name": "Anteckning", "content": doc})
+    md = client.get("/api/documents/Anteckning/export?format=md").content.decode()
+    assert "Kolla siffran" not in md and "inne i" not in md and "rader" not in md
+    assert "Andra stycket." in md and "<!-- kod behålls -->" in md and md.startswith("---\ntitle: Krönika")
+    for fmt in ("txt", "html"):
+        out = client.get(f"/api/documents/Anteckning/export?format={fmt}").content.decode()
+        assert "Kolla siffran" not in out and "flera" not in out
+    xml = _docx_xml(client.get("/api/documents/Anteckning/export?format=docx").content)
+    assert "Kolla siffran" not in xml and "Första stycket." in xml
+    # Rubriken finns både som titel och först i texten – bara en gång i Word-filen.
+    assert xml.count("Krönika") == 1
+
+
+def test_strip_notes_unit():
+    from app.convert import strip_notes
+
+    assert strip_notes("a\n\n<!-- x -->\n\nb\n") == "a\n\nb\n"
+    assert strip_notes("a <!-- x --> b") == "a b"
+    assert strip_notes("<!-- a\nb\nc -->\ntext") == "text"
+    assert strip_notes("~~~\n<!-- k -->\n~~~") == "~~~\n<!-- k -->\n~~~"
+
+
+BOOK = "---\ntitle: Boken\n---\n\n# Boken\n\nFörord.\n\n## Kapitel 1\n\nEtt.\n\n## Kapitel 2\n\nTvå.\n"
+
+
+@pytest.mark.parametrize("chapters,expected", [(0, 0), (2, 2), (1, 0)])
+def test_page_break_before_chapters_docx(client, chapters, expected):
+    client.post("/api/documents", json={"name": "Bok", "content": BOOK})
+    r = client.get(f"/api/documents/Bok/export?format=docx&chapters={chapters}")
+    assert r.status_code == 200
+    xml = _docx_xml(r.content)
+    # Nivå 1: "# Boken" är dubblett av titeln och tas bort – ingen rubrik på nivå 1 kvar.
+    assert xml.count('w:type="page"') == expected
+
+
+def test_page_break_first_heading_not_broken(client):
+    client.post("/api/documents", json={"name": "Bok2", "content": "# Del 1\n\nA.\n\n# Del 2\n\nB.\n\n# Del 3\n\nC.\n"})
+    xml = _docx_xml(client.get("/api/documents/Bok2/export?format=docx&chapters=1").content)
+    assert xml.count('w:type="page"') == 2  # inte före första rubriken
+    odt = zipfile.ZipFile(io.BytesIO(client.get("/api/documents/Bok2/export?format=odt&chapters=1&template=manus").content))
+    assert odt.read("content.xml").decode().count('text:style-name="Pagebreak"') == 2
+    assert 'style:name="Pagebreak"' in odt.read("styles.xml").decode()
+    rtf = client.get("/api/documents/Bok2/export?format=rtf&chapters=1").content.decode()
+    assert rtf.count("\\page") >= 2
+    html = client.get("/api/documents/Bok2/export?format=html&chapters=1").content.decode()
+    assert html.count("break-after: page") == 2
+    # Markdown och text påverkas inte.
+    md = client.get("/api/documents/Bok2/export?format=md&chapters=1").content.decode()
+    assert "page" not in md
+    assert client.get("/api/documents/Bok2/export?format=docx&chapters=3").status_code == 400

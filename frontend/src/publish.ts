@@ -6,11 +6,12 @@
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { splitFrontmatter } from "./editor";
+import { stripNotes } from "./notes";
 
 const TAGS = ["h1", "h2", "h3", "h4", "h5", "h6", "p", "br", "strong", "em", "blockquote", "ul", "ol", "li", "a", "hr", "del", "code", "pre"];
 
 export function publishContent(markdown: string, withTitle: boolean): { html: string; text: string } {
-  let body = splitFrontmatter(markdown).body;
+  let body = stripNotes(splitFrontmatter(markdown).body);
   if (!withTitle) body = body.replace(/^\s*#[ \t]+[^\n]*\n*/, "");
   const raw = marked.parse(body, { async: false, gfm: true, breaks: false }) as string;
   const html = DOMPurify.sanitize(raw, { ALLOWED_TAGS: TAGS, ALLOWED_ATTR: ["href"] }).trim();

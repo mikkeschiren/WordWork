@@ -98,7 +98,8 @@ function updateMatches(tr: Transaction, state: EditorState, re: RegExp, old: Ran
     const rest = tr.mapping.slice(i + 1);
     map.forEach((_os, _oe, ns, ne) => {
       const from = Math.max(0, Math.min(rest.map(ns, -1), size));
-      const to = Math.max(from, Math.min(rest.map(ne, 1), size));
+      // Även en ren borttagning (from === to) ska söka om stycket den skedde i.
+      const to = Math.min(size, Math.max(from + 1, Math.min(rest.map(ne, 1), size)));
       state.doc.nodesBetween(from, to, (node, pos) => {
         if (!node.isTextblock) return true;
         if (!blocks.some((b) => b.from === pos)) {

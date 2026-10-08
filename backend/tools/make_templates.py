@@ -244,6 +244,13 @@ def make_odt(spec: Spec) -> bytes:
                        fo_keep_with_next="always")
         text_props(style("Title", parent="Heading"), spec.h1 + 6, bold=True)
 
+    # Sidbrytning före kapitel vid export (filters/chapters.lua): ett tomt stycke,
+    # 1 pt högt, som avslutar sidan.
+    pb = style("Pagebreak", parent="Standard")
+    para_props(pb, fo_break_after="page", fo_margin_top="0cm", fo_margin_bottom="0cm", fo_line_height="100%")
+    pb_text = _child(pb, "style", "text-properties")
+    pb_text.set(q("fo", "font-size"), "1pt")
+
     # Sidlayout: A4, marginaler och sidnummer i sidfoten.
     m = f"{spec.margin_cm}cm"
     auto = root.find("office:automatic-styles", NS)

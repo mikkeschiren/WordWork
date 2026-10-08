@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -98,15 +99,87 @@ def _pandoc(args: list[str], input_bytes: bytes | None = None) -> bytes:
     return res.stdout
 
 
-def export_document(name: str, markdown: str, fmt_key: str, template: str = "standard") -> tuple[bytes, ExportFormat]:
+_FENCE = re.compile(r"^\s*(```|~~~)")
+
+
+def strip_notes(md: str) -> str:
+    """Tar bort egna anteckningar (HTML-kommentarer), utom i kodblock.
+
+    En rad som bara bestod av en anteckning försvinner helt.
+    """
+    out: list[str] = []
+    fence = in_note = False
+    for line in md.split("\n"):
+        if not in_note and _FENCE.match(line):
+            fence = not fence
+        if fence:
+            out.append(line)
+            continue
+        was_in_note, rest, kept = in_note, line, ""
+        while rest:
+            if in_note:
+                end = rest.find("-->")
+                if end < 0:
+                    rest = ""
+                    break
+                rest, in_note = rest[end + 3:], False
+                if kept[-1:].isspace() and rest[:1].isspace():
+                    rest = rest.lstrip(" \t")
+            else:
+                start = rest.find("<!--")
+                if start < 0:
+                    kept += rest
+                    break
+                kept, rest, in_note = kept + rest[:start], rest[start + 4:], True
+        if kept.strip():
+            out.append(kept.rstrip())
+        elif not was_in_note and "<!--" not in line:
+            out.append(line)
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(out))
+
+
+def _title(frontmatter: str) -> str:
+    m = re.search(r"^title:[ \t]+(.+?)[ \t]*$", frontmatter, re.M)
+    if not m:
+        return ""
+    v = m.group(1)
+    if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+        v = v[1:-1]
+    return " ".join(v.split())
+
+
+def _drop_duplicate_title(frontmatter: str, body: str) -> str:
+    """Pandoc skriver titeln överst. Står samma rubrik först i texten tas den bort, så den inte syns två gånger."""
+    title = _title(frontmatter)
+    if not title:
+        return body
+    m = re.match(r"\s*#[ \t]+(.+?)[ \t#]*(?:\n|$)", body)
+    if m and " ".join(m.group(1).split()) == title:
+        return body[m.end():].lstrip("\n")
+    return body
+
+
+PAGED_FORMATS = {"docx", "odt", "rtf", "html"}
+
+
+def export_document(
+    name: str, markdown: str, fmt_key: str, template: str = "standard", chapters: int = 0
+) -> tuple[bytes, ExportFormat]:
+    """Exporterar. `chapters` (1 eller 2) ger ny sida före varje rubrik på den nivån."""
     fmt = EXPORT_FORMATS.get(fmt_key)
     if fmt is None:
         raise ConvertError(f"Okänt exportformat: {fmt_key}")
-    if fmt.pandoc is None:
-        return markdown.encode("utf-8"), fmt
-
     frontmatter, body = split_frontmatter(markdown)
+    body = strip_notes(body)  # egna anteckningar följer aldrig med
+    if fmt.pandoc is None:
+        return (frontmatter + body).encode("utf-8"), fmt
+    if fmt.key in {"docx", "odt", "rtf", "html"}:
+        body = _drop_duplicate_title(frontmatter, body)
     args = ["-f", MD_IN, "-t", fmt.pandoc, "--wrap=none", "-M", "lang=sv-SE"]
+    if chapters not in (0, 1, 2):
+        raise ConvertError("Kapitelnivån måste vara 1 eller 2.")
+    if chapters and fmt.key in PAGED_FORMATS:
+        args += ["--lua-filter", str(FILTERS / "chapters.lua"), "-M", f"ww-chapter-level={chapters}"]
     if fmt.key in {"docx", "odt", "rtf", "html"}:
         args.append("--standalone")
     if fmt.key == "html":

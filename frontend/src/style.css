@@ -839,7 +839,8 @@ dialog.modal .spacer {
 }
 
 .freq,
-.sentences {
+.sentences,
+.quotes {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -878,7 +879,8 @@ dialog.modal .spacer {
   outline-offset: -2px;
 }
 
-.sentences button {
+.sentences button,
+.quotes button {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -889,12 +891,14 @@ dialog.modal .spacer {
   color: var(--text);
 }
 
-.sentences .c {
+.sentences .c,
+.quotes .c {
   font-size: 12px;
   color: var(--muted);
 }
 
-.sentences .t {
+.sentences .t,
+.quotes .t {
   font-family: var(--doc-font);
   font-size: 14px;
   line-height: 1.45;
@@ -1609,4 +1613,167 @@ dialog.modal:has(.typo-modal) {
   align-items: center;
   gap: 12px;
   margin-top: 10px;
+}
+
+
+/* ---------- Ikoner i verktygsraden ---------- */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px;
+  line-height: 0;
+}
+
+.icon-btn .icon-svg {
+  display: block;
+}
+
+.icon-btn[aria-expanded="true"],
+.segmented .icon-btn[aria-pressed="true"] {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+}
+
+.segmented .seg.icon-btn {
+  padding: 3px 7px;
+}
+
+/* ---------- Egna anteckningar ---------- */
+.prose .note {
+  position: relative;
+  margin: 0.8em 0;
+  padding: 0.45em 0.8em 0.45em 2.1em;
+  border-radius: 6px;
+  background: color-mix(in srgb, #f2c94c 22%, var(--bg));
+  border-left: 3px solid #d9a92a;
+  font-family: var(--ui-font, system-ui, sans-serif);
+  font-size: 0.78em;
+  line-height: 1.5;
+  color: color-mix(in srgb, var(--text) 85%, transparent);
+  white-space: pre-wrap;
+}
+
+.prose .note::before {
+  content: "✎";
+  position: absolute;
+  left: 0.7em;
+  top: 0.45em;
+  opacity: 0.6;
+}
+
+/* ---------- Långa meningar ---------- */
+.prose .long-sentence {
+  background: color-mix(in srgb, #c0503c 9%, transparent);
+  box-shadow: inset 0 -2px 0 color-mix(in srgb, #c0503c 45%, transparent);
+  border-radius: 2px;
+}
+
+input.tiny {
+  width: 3.6em;
+  padding: 1px 4px;
+  margin: 0 2px;
+}
+
+/* ---------- Längdmål och deadline i statusraden ---------- */
+.status-length.over {
+  color: #b5642a;
+}
+
+.status-length.over .goal-bar i {
+  background: #b5642a;
+}
+
+.status-deadline[data-level="soon"] {
+  color: var(--accent);
+}
+
+.status-deadline[data-level="late"] {
+  color: #c0503c;
+}
+
+/* ---------- Metadatapanelen ---------- */
+.meta-form {
+  display: grid;
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.meta-form .meta-field {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.meta-field > span {
+  font-weight: 500;
+  color: var(--text);
+}
+
+.meta-field input[type="text"],
+.meta-field input[type="date"],
+.meta-field input[type="number"],
+.meta-field textarea,
+.meta-field select {
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--text) 18%, transparent);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  box-sizing: border-box;
+}
+
+.meta-field textarea {
+  resize: vertical;
+}
+
+.meta-field .row {
+  display: flex;
+  gap: 8px;
+}
+
+.meta-field .row input {
+  flex: 1;
+}
+
+.meta-field .row select {
+  width: auto;
+}
+
+.meta-others {
+  margin-top: 20px;
+}
+
+.meta-others dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  margin: 8px 0;
+  font-size: 13px;
+}
+
+.meta-others dt {
+  color: var(--muted);
+}
+
+.meta-others dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.nominal-sum {
+  margin: 4px 0 8px;
+}
+
+.nominal-sum strong {
+  font-size: 1.4em;
+  font-variant-numeric: tabular-nums;
+}
+
+label.field.wide {
+  grid-template-columns: 9.5em 1fr;
+  margin-top: 8px;
 }

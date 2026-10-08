@@ -12,6 +12,7 @@ interface MenuDeps {
   spell: SpellService;
   replace: (from: number, to: number, text: string) => void;
   openChars: () => void;
+  toggleNote: () => void;
 }
 
 let current: HTMLElement | null = null;
@@ -49,7 +50,7 @@ export function openContextMenu(event: MouseEvent, view: EditorView, deps: MenuD
     closeMenu();
     const menu = h("div", { class: "context-menu", role: "menu" });
     current = menu;
-    menu.append(charsItem(deps, view, hit.pos));
+    menu.append(charsItem(deps, view, hit.pos), noteItem(deps, view, hit.pos));
     document.body.append(menu);
     position(menu, event.clientX, event.clientY);
     return true;
@@ -77,7 +78,7 @@ export function openContextMenu(event: MouseEvent, view: EditorView, deps: MenuD
   const misspelled = deps.spell.isMisspelled(range.word);
   if (misspelled) buildSpelling(menu, range, deps, choose);
   buildSynonyms(menu, range, choose);
-  menu.append(h("hr", {}), charsItem(deps, view, hit.pos));
+  menu.append(h("hr", {}), charsItem(deps, view, hit.pos), noteItem(deps, view, hit.pos));
 
   document.body.append(menu);
   position(menu, event.clientX, event.clientY);
@@ -145,6 +146,17 @@ function charsItem(deps: MenuDeps, view: EditorView, pos: number): HTMLButtonEle
     const p = Math.min(pos, view.state.doc.content.size);
     view.dispatch(view.state.tr.setSelection(TextSelection.near(view.state.doc.resolve(p))));
     deps.openChars();
+  });
+}
+
+/** Gör stycket till en egen anteckning (eller tillbaka). */
+function noteItem(deps: MenuDeps, view: EditorView, pos: number): HTMLButtonElement {
+  const $pos = view.state.doc.resolve(Math.min(pos, view.state.doc.content.size));
+  const inNote = $pos.parent.type.name === "note";
+  return item(inNote ? "Gör till vanligt stycke" : "Gör till egen anteckning", () => {
+    closeMenu();
+    view.dispatch(view.state.tr.setSelection(TextSelection.near($pos)));
+    deps.toggleNote();
   });
 }
 

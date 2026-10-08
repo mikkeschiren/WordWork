@@ -59,7 +59,7 @@ export const STOPWORDS = new Set(
 );
 
 // Förkortningar vars punkter inte ska räknas som meningsslut.
-const ABBREVIATIONS =
+export const ABBREVIATIONS =
   /\b(?:t\.ex|bl\.a|s\.k|d\.v\.s|dvs|m\.m|m\.fl|o\.s\.v|osv|t\.o\.m|f\.d|p\.g\.a|e\.d|e\.dyl|resp|ca|kl|nr|s|jfr|fr\.o\.m|t\.v|a\.k\.a|f\.ö|i\.o\.m|o\.d)\./giu;
 
 /** Delar upp text i meningar. Stycken utan avslutande skiljetecken (t.ex. rubriker) räknas som egna meningar. */
@@ -186,4 +186,87 @@ export function analyze(text: string, opts: { includeStopwords?: boolean; top?: 
     longestSentences,
     frequency,
   };
+}
+
+
+/* ------------------------------------------------------------------ */
+/* Citat                                                               */
+/* ------------------------------------------------------------------ */
+
+export interface Quote {
+  text: string;
+  kind: "citat" | "replik";
+}
+
+// Citattecken som öppnar och stänger. Svenska ”…” och »…» använder samma tecken på båda sidor.
+const QUOTE_PATTERNS = [/”([^”\n]+)”/g, /“([^”“\n]+)”/g, /„([^“”„\n]+)[“”]/g, /»([^»«\n]+)[»«]/g, /"([^"\n]+)"/g];
+
+/**
+ * Citat i texten: citerat inom citattecken (minst tre ord – enstaka ord inom
+ * citattecken är oftast markeringar, inte citat) och repliker (stycken som börjar
+ * med pratminus). I den ordning de står i texten.
+ */
+export function findQuotes(text: string): Quote[] {
+  const found: { index: number; q: Quote }[] = [];
+  const seen = new Set<string>();
+  const add = (index: number, t: string, kind: Quote["kind"]) => {
+    const clean = t.replace(/\s+/g, " ").trim();
+    if (!clean || seen.has(clean)) return;
+    seen.add(clean);
+    found.push({ index, q: { text: clean, kind } });
+  };
+  for (const re of QUOTE_PATTERNS) {
+    re.lastIndex = 0;
+    for (const m of text.matchAll(re)) {
+      if ((m[1].match(WORD_RE) ?? []).length >= 3) add(m.index!, m[1], "citat");
+    }
+  }
+  let offset = 0;
+  for (const para of text.split(/\n/)) {
+    if (/^\s*[–—]\s/.test(para) && (para.match(WORD_RE) ?? []).length >= 2) add(offset, para.trim(), "replik");
+    offset += para.length + 1;
+  }
+  return found.sort((a, b) => a.index - b.index).map((f) => f.q);
+}
+
+/* ------------------------------------------------------------------ */
+/* Substantiveringar (nominalstil)                                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Substantiv bildade av verb och adjektiv med typiska ändelser (genomförande-
+ * typer utelämnas eftersom -ande också är particip). Mönstret är avsiktligt
+ * snävt: hellre färre träffar än felaktiga.
+ */
+const NOMINAL_RE =
+  /^\p{L}{3,}(?:ning(?:en|ar|arna|ens|ars|arnas)?|het(?:en|er|erna|ens|ers|ernas)?|else(?:n|r|rna|ns|rs)?|tion(?:en|er|erna|ens|ers)?|itet(?:en|er|erna)?|andet|endet|andena|endena)$/u;
+
+export interface NominalStats {
+  count: number;
+  per100: number;
+  top: { word: string; count: number }[];
+}
+
+export function nominalStyle(text: string): NominalStats {
+  const ws = words(text);
+  const counts = new Map<string, number>();
+  let count = 0;
+  for (const w of ws) {
+    const l = w.toLowerCase();
+    if (l.length < 7 || !NOMINAL_RE.test(l)) continue;
+    count++;
+    counts.set(l, (counts.get(l) ?? 0) + 1);
+  }
+  const top = [...counts.entries()]
+    .map(([word, c]) => ({ word, count: c }))
+    .sort((a, b) => b.count - a.count || collator.compare(a.word, b.word))
+    .slice(0, 12);
+  return { count, per100: ws.length ? (count * 100) / ws.length : 0, top };
+}
+
+export function nominalLevel(per100: number): string {
+  if (per100 < 2) return "Lätt – verbal stil";
+  if (per100 < 4) return "Normal";
+  if (per100 < 6) return "Ganska tung";
+  return "Tung nominalstil";
 }

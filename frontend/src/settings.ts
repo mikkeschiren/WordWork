@@ -26,6 +26,8 @@ export interface Settings {
   quoteStyle: QuoteStyle;
   aiModel: string; // tom = serverns standardmodell
   aiThink: boolean;
+  markLongSentences: boolean;
+  longSentenceWords: number;
 }
 
 export const FONTS: Record<Font, { label: string; stack: string }> = {
@@ -62,6 +64,8 @@ const DEFAULTS: Settings = {
   quoteStyle: "sv",
   aiModel: "",
   aiThink: true,
+  markLongSentences: false,
+  longSentenceWords: 30,
 };
 
 const KEY = "ww.settings";
