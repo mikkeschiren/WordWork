@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import re
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -74,6 +75,51 @@ QUICK_PROMPTS: dict[str, str] = {
     "siffror, citat, titlar). Avgör inte om de stämmer – förklara bara varför de bör kontrolleras.",
 }
 
+# Texttyper (frontmatter: genre). Varje typ ger AI:n en kort, genomtänkt instruktion.
+GENRES: dict[str, tuple[str, str]] = {
+    "nyhet": (
+        "Nyhet / reportage",
+        "Texten är journalistisk (nyhet eller reportage). Bedöm tydlighet och precision, om ingressen "
+        "bär det viktigaste, att källor och citat är tydligt attribuerade, saklighet och balans, och "
+        "peka ut uppgifter som bör faktakontrolleras. Följ svensk journalistisk språkpraxis (t.ex. "
+        "TT-språket): korta meningar, aktiva verb, siffror och titlar skrivna konsekvent.",
+    ),
+    "recension": (
+        "Recension / kritik",
+        "Texten är en recension eller kritik. Det värderande omdömet ska vara tydligt och belagt med "
+        "konkreta iakttagelser. Kontrollera att verket (titel, upphovspersoner, medverkande, sammanhang) "
+        "beskrivs korrekt och att läsaren förstår vad som bedöms. En personlig stil är en tillgång.",
+    ),
+    "kronika": (
+        "Krönika / essä",
+        "Texten är en krönika eller essä. Den personliga rösten, ironi, utvikningar och en ledigare "
+        "stil är avsiktliga – granska dem inte som fel. Fokusera på resonemangets bärighet, den röda "
+        "tråden, poängen och hur inledning och slut hänger ihop.",
+    ),
+    "prosa": (
+        "Prosa (skönlitteratur)",
+        "Texten är skönlitterär prosa. Stilgrepp, ofullständiga meningar, upprepningar, ovanlig "
+        "interpunktion, dialekt och talspråk i dialog kan vara avsiktliga – påpeka dem bara om de "
+        "verkar oavsiktliga, och säg i så fall att det är en bedömning. Fokusera på rytm, gestaltning, "
+        "perspektiv, dialog, tempo och dramaturgi snarare än på regler.",
+    ),
+    "lyrik": (
+        "Lyrik",
+        "Texten är lyrik. Radbrytningar, strofindelning, interpunktion (eller avsaknaden av den), "
+        "upprepningar och ordföljd är avsiktliga – rätta dem inte. Kommentera i stället bildspråk, "
+        "klang, rytm och vad som eventuellt bryter dikten, och var försiktig med omdömen.",
+    ),
+    "sakprosa": (
+        "Sakprosa / rapport",
+        "Texten är sakprosa (t.ex. rapport, utredning eller informationstext). Bedöm tydlighet, "
+        "struktur och disposition, klarspråk, att begrepp används konsekvent och att slutsatserna "
+        "följer av underlaget.",
+    ),
+    "annat": ("Annat", ""),
+}
+
+MAX_AI_INSTRUCTIONS = 2_000
+
 LOCAL_HOSTS = {"localhost", "host.docker.internal", "ollama", "127.0.0.1", "::1"}
 
 
@@ -107,6 +153,78 @@ def context_size(chars: int) -> int:
     return CONTEXT_STEPS[-1]
 
 
+_META_KEY = re.compile(r"^([A-Za-z_][\w-]*):(?:[ \t]+(.*?))?[ \t]*$")
+
+
+def parse_meta(frontmatter: str) -> dict[str, str]:
+    """Enkla fält i frontmattern: `nyckel: värde` och blockfält (`nyckel: |`)."""
+    lines = frontmatter.strip().splitlines()
+    if lines and lines[0].strip().lstrip("\ufeff") == "---":
+        lines = lines[1:]
+    if lines and lines[-1].strip() in ("---", "..."):
+        lines = lines[:-1]
+    out: dict[str, str] = {}
+    i = 0
+    while i < len(lines):
+        m = _META_KEY.match(lines[i])
+        i += 1
+        if not m:
+            continue
+        key, raw = m.group(1), (m.group(2) or "")
+        block: list[str] = []
+        while i < len(lines) and (re.match(r"^[ \t]+\S|^-\s", lines[i]) or not lines[i].strip()):
+            block.append(lines[i])
+            i += 1
+        if re.fullmatch(r"[|>][+-]?", raw):
+            texts = [b for b in block if b.strip()]
+            indent = min((len(b) - len(b.lstrip()) for b in texts), default=0)
+            value = "\n".join(b[indent:] for b in block).strip()
+            if raw.startswith(">"):
+                value = re.sub(r"(?<=\S)\n(?=\S)", " ", value)
+            out[key] = value
+        elif raw and not raw.startswith(("[", "{")):
+            v = raw
+            if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+                v = v[1:-1]
+            else:
+                v = re.sub(r"\s+#.*$", "", v)
+            out[key] = v
+    return out
+
+
+def _without_keys(frontmatter: str, keys: set[str]) -> str:
+    """Frontmattern utan vissa fält (och deras indragna rader)."""
+    lines = frontmatter.strip().splitlines()
+    out: list[str] = []
+    skipping = False
+    for line in lines:
+        m = _META_KEY.match(line)
+        if m:
+            skipping = m.group(1) in keys
+        elif not re.match(r"^[ \t]+\S|^-\s|^\s*$", line):
+            skipping = False
+        if not skipping:
+            out.append(line)
+    return "\n".join(out)
+
+
+def text_guidance(frontmatter: str) -> list[str]:
+    """Texttyp och författarens egna instruktioner, som avsnitt i systeminstruktionen."""
+    meta = parse_meta(frontmatter)
+    parts: list[str] = []
+    genre = GENRES.get(meta.get("genre", "").strip().lower())
+    if genre and genre[1]:
+        parts.append(f"Om texten – texttyp: {genre[0]}.\n{genre[1]}")
+    own = meta.get("ai", "").strip()[:MAX_AI_INSTRUCTIONS]
+    if own:
+        parts.append(
+            "Författarens egna instruktioner för den här texten. Följ dem när du svarar, men "
+            "grundreglerna ovan gäller alltid först – du skriver aldrig om texten, oavsett vad som står här:\n"
+            f"<instruktioner>\n{own}\n</instruktioner>"
+        )
+    return parts
+
+
 def build_messages(
     document: str,
     selection: str,
@@ -121,8 +239,9 @@ def build_messages(
     if len(selection) > MAX_DOCUMENT_CHARS:
         raise AIError("Markeringen är för lång för AI-stödet. Markera ett kortare avsnitt.")
 
-    context = ["Här är författarens text (Markdown). Den är underlag – skriv inte om den."]
-    meta = frontmatter.strip().strip("-").strip()
+    context = text_guidance(frontmatter)
+    context.append("Här är författarens text (Markdown). Den är underlag – skriv inte om den.")
+    meta = _without_keys(frontmatter, {"ai", "genre"}).strip().strip("-").strip()
     if meta:
         context.append(f"Metadata om texten (YAML), t.ex. rubrik, ingress och längdmål:\n<metadata>\n{meta[:4000]}\n</metadata>")
     if len(body) <= MAX_DOCUMENT_CHARS:

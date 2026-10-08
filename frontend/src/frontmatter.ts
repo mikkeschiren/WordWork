@@ -3,10 +3,11 @@
  *
  * Bara de fält som metadatapanelen hanterar skrivs om – allt annat i
  * frontmattern (kommentarer, listor, andra nycklar) lämnas exakt som det är.
- * Fält med flerradiga värden (listor, block) redigeras i Markdown-vyn.
+ * Blockfält (`ai: |` med indragna rader) hanteras som flerradig text; listor
+ * och objekt redigeras i Markdown-vyn.
  */
 
-export const META_FIELDS = ["title", "lead", "author", "client", "deadline", "length"] as const;
+export const META_FIELDS = ["title", "lead", "author", "client", "deadline", "length", "genre", "ai"] as const;
 export type MetaKey = (typeof META_FIELDS)[number];
 
 export interface MetaField {
@@ -55,7 +56,22 @@ function parse(frontmatter: string): Parsed | null {
   return { open: m[1], lines: body ? body.split(/\r?\n/) : [], close: m[3] };
 }
 
-/** Fälten på högsta nivån, i den ordning de står. */
+/** Antal rader efter `i` som hör till fältets värde (indragna rader eller listrader). */
+function continuation(lines: string[], i: number): number {
+  let n = 0;
+  while (i + 1 + n < lines.length && (/^[ \t]+\S|^-\s/.test(lines[i + 1 + n]) || (lines[i + 1 + n].trim() === "" && /^[ \t]+\S/.test(lines[i + 2 + n] ?? "")))) n++;
+  return n;
+}
+
+/** Värdet i ett blockfält (`|` eller `>`): raderna utan indrag. */
+function blockValue(indicator: string, lines: string[]): string {
+  const indent = Math.min(...lines.filter((l) => l.trim()).map((l) => /^[ \t]*/.exec(l)![0].length));
+  const text = lines.map((l) => l.slice(Number.isFinite(indent) ? indent : 0)).join("\n");
+  const folded = indicator.startsWith(">") ? text.replace(/([^\n])\n(?=[^\n])/g, "$1 ") : text;
+  return folded.replace(/\s+$/, "");
+}
+
+/** Fälten på högsta nivån, i den ordning de står. Blockfält (`|`, `>`) läses som flerradig text. */
 export function readMeta(frontmatter: string): MetaField[] {
   const p = parse(frontmatter);
   if (!p) return [];
@@ -64,10 +80,14 @@ export function readMeta(frontmatter: string): MetaField[] {
     const m = KEY_RE.exec(p.lines[i]);
     if (!m) continue;
     const raw = m[2] ?? "";
-    const next = p.lines[i + 1] ?? "";
-    const continued = /^[ \t]+\S|^-\s/.test(next);
-    const complex = (!raw && continued) || /^[|>]/.test(raw) || /^[[{]/.test(raw);
-    out.push({ key: m[1], value: complex ? raw : unquote(raw), complex });
+    const n = continuation(p.lines, i);
+    if (/^[|>][+-]?$/.test(raw)) {
+      out.push({ key: m[1], value: blockValue(raw, p.lines.slice(i + 1, i + 1 + n)), complex: false });
+    } else {
+      const complex = (!raw && n > 0) || /^[[{]/.test(raw);
+      out.push({ key: m[1], value: complex ? raw : unquote(raw), complex });
+    }
+    i += n;
   }
   return out;
 }
@@ -78,21 +98,27 @@ export function metaValue(frontmatter: string, key: string): string {
 }
 
 /**
- * Sätter (eller tar bort, om värdet är tomt) ett enkelt fält och returnerar den
- * nya frontmattern. Finns ingen frontmatter skapas en.
+ * Sätter (eller tar bort, om värdet är tomt) ett fält och returnerar den nya
+ * frontmattern. Finns ingen frontmatter skapas en. Med `multiline` sparas text
+ * med radbrytningar som ett blockfält (`key: |`); annars blir det en rad.
  */
-export function writeMeta(frontmatter: string, key: string, value: string): string {
-  value = value.replace(/\s*\n\s*/g, " ").trim();
+export function writeMeta(frontmatter: string, key: string, value: string, multiline = false): string {
+  value = multiline
+    ? value.replace(/\r\n?/g, "\n").replace(/[ \t]+$/gm, "").replace(/^\n+|\s+$/g, "")
+    : value.replace(/\s*\n\s*/g, " ").trim();
   const p = parse(frontmatter) ?? { open: "---\n", lines: [], close: "---\n\n" };
+  const lines = value.includes("\n")
+    ? [`${key}: |`, ...value.split("\n").map((l) => (l ? `  ${l}` : ""))]
+    : [`${key}: ${quoteYaml(value)}`];
   const idx = p.lines.findIndex((l) => KEY_RE.exec(l)?.[1] === key);
   if (idx >= 0) {
-    // Ett komplext värde (lista, block) skrivs inte över.
-    const next = p.lines[idx + 1] ?? "";
-    if (!KEY_RE.exec(p.lines[idx])?.[2] && /^[ \t]+\S|^-\s/.test(next)) return frontmatter;
-    if (value) p.lines[idx] = `${key}: ${quoteYaml(value)}`;
-    else p.lines.splice(idx, 1);
+    const raw = KEY_RE.exec(p.lines[idx])?.[2] ?? "";
+    const n = continuation(p.lines, idx);
+    // En lista eller ett objekt skrivs inte över – redigeras i Markdown-vyn.
+    if ((!raw && n > 0) || /^[[{]/.test(raw)) return frontmatter;
+    p.lines.splice(idx, 1 + n, ...(value ? lines : []));
   } else if (value) {
-    p.lines.push(`${key}: ${quoteYaml(value)}`);
+    p.lines.push(...lines);
   }
   if (!p.lines.some((l) => l.trim())) return ""; // tom frontmatter tas bort
   return `${p.open}${p.lines.join("\n")}\n${p.close}`;

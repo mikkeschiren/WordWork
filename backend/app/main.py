@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import __version__
-from .ai import QUICK_PROMPTS, AIError, OllamaClient, build_messages, context_size, is_external
+from .ai import GENRES, QUICK_PROMPTS, AIError, OllamaClient, build_messages, context_size, is_external
 from .ai_openai import OpenAIClient
 from .config import Settings
 from .convert import EXPORT_FORMATS, MAX_IMPORT_BYTES, PAGED_FORMATS, TEMPLATE_LABELS, ConvertError, export_document, import_file
@@ -192,6 +192,11 @@ def create_app(settings: Settings | None = None, ai_transport: httpx.AsyncBaseTr
         }
 
     # ---------- AI (Ollama eller OpenAI-kompatibel server) ----------
+    @app.get("/api/ai/genres")
+    def ai_genres() -> list[dict]:
+        """Texttyper för metadatapanelen (fungerar även när AI-stödet är avstängt)."""
+        return [{"key": k, "label": label} for k, (label, _) in GENRES.items()]
+
     @app.get("/api/ai/status")
     async def ai_status() -> dict:
         if ollama is None:

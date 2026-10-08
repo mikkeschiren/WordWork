@@ -50,6 +50,9 @@ export interface AIPanelDeps {
   showInText: (phrase: string) => boolean;
   flush: () => Promise<void>;
   prefs: () => AIPrefs;
+  /** Texttyp och om det finns egna instruktioner (från dokumentets metadata). */
+  textInfo: () => { genre: string; instructions: boolean };
+  openMeta: () => void;
   savePrefs: (patch: Partial<AIPrefs>) => void;
 }
 
@@ -380,6 +383,7 @@ export class AIPanel {
                   h("span", {}, "Tänk efter först (noggrannare)"),
                 ),
           ),
+      this.textInfoLine(),
       quick,
       h("div", { class: "ai-history" }, this.historySelect, this.deleteBtn),
       this.list,
@@ -402,6 +406,18 @@ export class AIPanel {
     );
     this.renderHistory();
     this.renderMessages();
+  }
+
+  /** Vad AI:n vet om texten: texttyp och egna instruktioner, med länk till metadata. */
+  private textInfoLine(): HTMLElement {
+    const { genre, instructions } = this.deps.textInfo();
+    const parts = [genre || "Ingen texttyp", instructions ? "egna instruktioner" : ""].filter(Boolean);
+    return h(
+      "p",
+      { class: "ai-textinfo meta", title: "Texttyp och instruktioner till AI:n anges i Metadata" },
+      `Texttyp: ${parts.join(" · ")} `,
+      h("button", { class: "link", onclick: () => this.deps.openMeta() }, genre || instructions ? "Ändra" : "Ange …"),
+    );
   }
 
   focusInput(): void {

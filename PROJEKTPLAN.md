@@ -300,4 +300,10 @@ Baserad på `PLAN.md`. Målet är en distraktionsfri ordbehandlare för kulturjo
   - Grundregler ur Svenska skrivregler: citattecken, punkt och citattecken, tankstreck.
   - Frontmatter skickas nu som ett eget `<metadata>`-block, så att ingress och längdmål kan användas som underlag. Tidigare skickades den inte alls, trots att metadatapanelen sa att ingressen var underlag för AI:n.
   - Klickbara citat hittas även när AI:n råkar ta med Markdown-tecken i citatet.
+- **Version 1.8.0 (2026-10-08) – texttyp och instruktioner till AI:**
+  - Metadatapanelen har två nya fält: *Texttyp* (`genre`) och *Instruktioner till AI* (`ai`, blockfält). `frontmatter.ts` läser och skriver nu blockfält (`|`, `>`).
+  - Backend (`ai.py`): `GENRES` innehåller sju texttyper, var och en med en färdig instruktion, och `/api/ai/genres` listar dem även när AI är avstängt.
+  - Texttyp och egna instruktioner läggs i systeminstruktionen efter grundreglerna och före texten, med en uttrycklig skrivning om att grundreglerna gäller först. Egna instruktioner får vara högst 2 000 tecken. `ai` och `genre` skickas inte dubbelt i metadatablocket.
+  - AI-panelen visar texttyp och instruktioner med en länk till Metadata.
+  - Inställningar har *Texttyp för nya dokument*.
 - **Kvar efter v1 (förslag):** utvärdering av gemma4 för bättre svenska, CI-arbetsflöde (`.github/` kunde inte skrivas härifrån).

@@ -167,6 +167,7 @@ export const api = {
   settings: () => request<{ saved: boolean; settings: Record<string, unknown> }>("GET", "/settings"),
   saveSettings: (settings: object) => request<{ settings: Record<string, unknown> }>("PUT", "/settings", settings),
   trash: () => request<TrashItem[]>("GET", "/trash"),
+  genres: () => request<{ key: string; label: string }[]>("GET", "/ai/genres"),
   restoreTrash: (id: string) =>
     request<{ kind: "document" | "chat"; name: string; id?: string }>("POST", `/trash/${encodeURIComponent(id)}/restore`),
   chats: (name: string) => request<ChatSummary[]>("GET", `${doc(name)}/chats`),

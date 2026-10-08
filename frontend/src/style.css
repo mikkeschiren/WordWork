@@ -1777,3 +1777,12 @@ label.field.wide {
   grid-template-columns: 9.5em 1fr;
   margin-top: 8px;
 }
+
+.ai-textinfo {
+  margin: 0;
+  font-size: 12.5px;
+}
+
+.ai-textinfo .link {
+  padding: 0 2px;
+}

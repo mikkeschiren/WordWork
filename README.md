@@ -29,6 +29,7 @@ Texterna sparas som vanliga Markdown-filer i mappen `./data` bredvid projektet. 
   - I Markdown-vyn ser du källtexten.
 - **Metadata** (knappen med etikettikonen) sparas som YAML-frontmatter (`---` … `---`) först i filen. Den döljs i Skriv-vyn och räknas inte i ord eller analys.
   - I panelen fyller du i *Rubrik* (`title`), *Ingress* (`lead`), *Byline* (`author`), *Beställare* (`client`), *Deadline* (`deadline`) och *Längdmål* (`length`, till exempel `4500 tecken` eller `800 ord`).
+  - **Texttyp** (`genre`) och **Instruktioner till AI** (`ai`) styr AI-assistenten. Se *AI-assistent*.
   - Längdmålet visas som en mätare i statusraden. Den blir orange när texten är mer än 5 % för lång.
   - Deadline visas i statusraden ("Deadline i morgon"), med accentfärg när det är tre dagar kvar eller mindre och röd när den har passerat.
   - Rubriken blir dokumenttitel vid export. Står samma rubrik först i texten tas den bort i exporten, så att den inte syns två gånger.
@@ -110,6 +111,11 @@ Texterna sparas som vanliga Markdown-filer i mappen `./data` bredvid projektet. 
   - AI:n **föreslår men skriver aldrig i texten**. Det finns ingen knapp som infogar AI-text, och svaren visas bara i panelen.
   - Snabbval: granska språket, hitta upprepningar, stramare text, struktur och dramaturgi, fakta att kontrollera. Du kan också ställa egna frågor och följdfrågor.
   - Markera minst några ord för att frågan ska gälla just det avsnittet.
+  - **Texttyp och egna instruktioner** anges i Metadata och gäller både snabbval och egna frågor. AI-panelen visar vad som gäller (*Texttyp: Prosa · egna instruktioner*), och *Ändra* öppnar Metadata.
+    - Texttyperna är *Nyhet / reportage*, *Recension / kritik*, *Krönika / essä*, *Prosa (skönlitteratur)*, *Lyrik*, *Sakprosa / rapport* och *Annat*. Var och en ger AI:n en färdig instruktion om vad som är avsiktligt och vad som är värt att granska. Med *Prosa* och *Lyrik* rättas till exempel inte ofullständiga meningar, radbrytningar och interpunktion som regelfel.
+    - *Instruktioner till AI* är fri text på flera rader. I filen blir det ett blockfält: `ai: |` följt av indragna rader.
+    - Instruktionerna läggs efter grundreglerna, och det står uttryckligen att grundreglerna gäller först. AI:n skriver alltså aldrig om texten, oavsett vad instruktionerna säger.
+    - Under *Inställningar → Texttyp för nya dokument* väljer du en texttyp som nya dokument får automatiskt.
   - AI:n får veta att texten är Markdown: `*kursiv*`, `**fet**`, `#` och så vidare är formatering, inte fel. Den får också några grundregler ur Svenska skrivregler, till exempel att punkten står före det avslutande citattecknet när citatet är en hel mening. Metadata (rubrik, ingress, längdmål) skickas med för sig, och egna anteckningar räknas som bakgrund, inte som text att granska.
   - Citat i svaren som finns i texten är klickbara och markerar stället i texten.
   - *Tänk efter först* låter modellen resonera innan den svarar. Det ger träffsäkrare svar men tar längre tid. Resonemanget kan visas.

@@ -224,3 +224,27 @@ def test_chat_error_is_saved_and_validation(client, fake):
     # Utan dokument och id sparas inget (som förut).
     fake.fail = False
     assert client.post("/api/ai/chat", json={"prompt": "Hej"}).status_code == 200
+
+
+def test_genre_and_own_instructions(client, fake):
+    assert [g["key"] for g in client.get("/api/ai/genres").json()][:2] == ["nyhet", "recension"]
+    doc = (
+        "---\ntitle: Ålgång\ngenre: prosa\nai: |\n  Berättaren är opålitlig.\n\n  Dialekten är avsiktlig.\n"
+        "length: 4500 tecken\n---\n\nEn fisk kommer sällan ensam.\n"
+    )
+    client.post("/api/ai/chat", json={"quick": "language", "document": doc})
+    system = fake.requests[-1]["messages"][0]["content"]
+    assert system.startswith(SYSTEM_PROMPT)
+    assert "texttyp: Prosa (skönlitteratur)" in system
+    assert "<instruktioner>\nBerättaren är opålitlig.\n\nDialekten är avsiktlig.\n</instruktioner>" in system
+    assert "grundreglerna ovan gäller alltid först" in system
+    meta = system.split("<metadata>")[1].split("</metadata>")[0]
+    assert "title: Ålgång" in meta and "length: 4500 tecken" in meta and "ai:" not in meta and "genre" not in meta
+    # Instruktionerna kommer före texten.
+    assert system.index("<instruktioner>") < system.index("<text>")
+
+
+def test_unknown_or_missing_genre(client, fake):
+    client.post("/api/ai/chat", json={"prompt": "Hej", "document": "---\ngenre: okänd\nai: 'En rad.'\n---\n\nText."})
+    system = fake.requests[-1]["messages"][0]["content"]
+    assert "texttyp" not in system and "<instruktioner>\nEn rad.\n</instruktioner>" in system

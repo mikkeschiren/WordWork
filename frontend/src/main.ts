@@ -96,6 +96,8 @@ class App {
   private statusDeadline = h("span", { class: "status-deadline", hidden: true });
   /** Frontmatter för aktuellt dokument (uppdateras vid öppning, i metadatapanelen och i Markdown-vyn). */
   private frontmatter = "";
+  /** Texttyper från servern (för metadata och inställningar). */
+  private genres: { key: string; label: string }[] = [];
   private charsPanel = h("div", {
     class: "popover chars",
     id: "panel-chars",
@@ -164,6 +166,11 @@ class App {
       },
       flush: () => this.flush(),
       prefs: () => this.settings,
+      textInfo: () => {
+        const genre = metaValue(this.frontmatter, "genre");
+        return { genre: genre ? this.genreLabel(genre) : "", instructions: !!metaValue(this.frontmatter, "ai").trim() };
+      },
+      openMeta: () => this.toggleDrawer(this.metaDrawer),
       savePrefs: (patch) => {
         Object.assign(this.settings, patch);
         saveSettings(this.settings);
@@ -256,6 +263,7 @@ class App {
   // ---------------- uppstart ----------------
   async start(): Promise<void> {
     await this.loadServerSettings();
+    if (!this.genres.length) this.genres = await api.genres().catch(() => []);
     void api
       .health()
       .then((h) => {
@@ -279,7 +287,7 @@ class App {
     const docs = await api.list();
     let name = localStorage.getItem(LAST_DOC_KEY);
     if (!name || !docs.some((d) => d.name === name)) name = docs[0]?.name ?? null;
-    if (!name) name = (await api.create()).name;
+    if (!name) name = (await api.create(undefined, this.newDocContent())).name;
     await this.open(name);
   }
 
@@ -332,12 +340,22 @@ class App {
     const name = await prompt("Nytt dokument", "", "Skapa");
     if (name === null) return;
     try {
-      const doc = await api.create(name);
+      const doc = await api.create(name, this.newDocContent());
       await this.open(doc.name);
       this.closeDrawers();
     } catch (e) {
       toast(errorText(e));
     }
+  }
+
+  /** Innehåll i ett nytt dokument: texttypen från Inställningar, om en är vald. */
+  private newDocContent(): string {
+    const g = this.settings.defaultGenre;
+    return g && this.genres.some((x) => x.key === g) ? writeMeta("", "genre", g) : "";
+  }
+
+  private genreLabel(key: string): string {
+    return this.genres.find((g) => g.key === key.trim().toLowerCase())?.label ?? key;
   }
 
   private async renameCurrent(): Promise<void> {
@@ -655,8 +673,8 @@ class App {
   // ---------------- metadata ----------------
   private metaTimer: number | undefined;
 
-  private setMeta(key: string, value: string): void {
-    const next = writeMeta(this.frontmatter, key, value);
+  private setMeta(key: string, value: string, multiline = false): void {
+    const next = writeMeta(this.frontmatter, key, value, multiline);
     if (next === this.frontmatter) return;
     this.frontmatter = next;
     this.editor.setFrontmatter(next);
@@ -667,15 +685,26 @@ class App {
     const fm = this.frontmatter;
     const fields = readMeta(fm);
     const field = (key: string) => fields.find((f) => f.key === key);
+    const multi = (key: string) => key === "ai";
     const queue = (key: string, value: () => string) => {
       window.clearTimeout(this.metaTimer);
-      this.metaTimer = window.setTimeout(() => this.setMeta(key, value()), 350);
+      this.metaTimer = window.setTimeout(() => this.setMeta(key, value(), multi(key)), 350);
     };
     const flushMeta = (key: string, value: () => string) => {
       window.clearTimeout(this.metaTimer);
-      this.setMeta(key, value());
+      this.setMeta(key, value(), multi(key));
     };
-    const textField = (key: string, label: string, hint: string, multiline = false) => {
+
+    // Texttyp
+    const genreNow = metaValue(fm, "genre").trim().toLowerCase();
+    const genreSel = h("select", { "aria-label": "Texttyp" }) as HTMLSelectElement;
+    genreSel.append(h("option", { value: "", selected: !genreNow }, "– Ingen –"));
+    for (const g of this.genres) genreSel.append(h("option", { value: g.key, selected: g.key === genreNow }, g.label));
+    if (genreNow && !this.genres.some((g) => g.key === genreNow)) {
+      genreSel.append(h("option", { value: genreNow, selected: true }, `${genreNow} (okänd)`));
+    }
+    genreSel.addEventListener("change", () => flushMeta("genre", () => genreSel.value));
+    const textField = (key: string, label: string, hint: string, multiline = false, keepLines = false) => {
       const f = field(key);
       const input = h(multiline ? "textarea" : "input", {
         ...(multiline ? { rows: 3 } : { type: "text" }),
@@ -687,6 +716,7 @@ class App {
       if (multiline) (input as unknown as HTMLTextAreaElement).value = f && !f.complex ? f.value : "";
       input.addEventListener("input", () => queue(key, () => input.value));
       input.addEventListener("change", () => flushMeta(key, () => input.value));
+      if (keepLines) (input as unknown as HTMLTextAreaElement).rows = 5;
       return h(
         "label",
         { class: "field meta-field" },
@@ -739,6 +769,20 @@ class App {
         textField("lead", "Ingress", "För planering och AI-assistenten – följer inte med som text.", true),
         textField("author", "Byline", "Författare i dokumentegenskaperna vid export."),
         textField("client", "Beställare", "Till exempel redaktion eller publikation."),
+        h(
+          "label",
+          { class: "field meta-field" },
+          h("span", {}, "Texttyp"),
+          genreSel,
+          h("small", { class: "meta" }, "AI-assistenten anpassar sina råd efter texttypen – prosa granskas inte som en nyhetsartikel."),
+        ),
+        textField(
+          "ai",
+          "Instruktioner till AI",
+          "Till exempel: ”Romanen utspelar sig på 1890-talet – ålderdomliga ord är avsiktliga.” AI:n följer dem, men skriver aldrig om din text.",
+          true,
+          true,
+        ),
         h("label", { class: "field meta-field" }, h("span", {}, "Deadline"), dl, dlInfo),
         h(
           "div",
@@ -2119,6 +2163,12 @@ class App {
       check("Byt automatiskt till typografiska tecken", s.autoTypography, (v) => update({ autoTypography: v })),
       select<QuoteStyle>("Citattecken", s.quoteStyle, QUOTE_STYLES, (v) => update({ quoteStyle: v })),
       h("p", { class: "hint" }, "\" → ”   ' → ’   -- → –   --- → —   ... → …   12-15 → 12–15. Backsteg direkt efter ångrar."),
+      select<string>(
+        "Texttyp för nya dokument",
+        s.defaultGenre,
+        Object.fromEntries([["", "– Ingen –"], ...this.genres.map((g) => [g.key, g.label])]) as Record<string, string>,
+        (v) => update({ defaultGenre: v }),
+      ),
       range(
         "Dagens mål",
         s.dailyGoal,

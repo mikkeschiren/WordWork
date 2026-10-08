@@ -28,6 +28,7 @@ export interface Settings {
   aiThink: boolean;
   markLongSentences: boolean;
   longSentenceWords: number;
+  defaultGenre: string; // texttyp för nya dokument, tom = ingen
 }
 
 export const FONTS: Record<Font, { label: string; stack: string }> = {
@@ -66,6 +67,7 @@ const DEFAULTS: Settings = {
   aiThink: true,
   markLongSentences: false,
   longSentenceWords: 30,
+  defaultGenre: "",
 };
 
 const KEY = "ww.settings";
