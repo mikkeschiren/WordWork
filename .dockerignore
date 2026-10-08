@@ -7,3 +7,5 @@ frontend/dist
 **/.pytest_cache
 *.md
 !frontend/**/*.md
+.env
+.env.*

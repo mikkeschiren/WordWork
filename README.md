@@ -1,31 +1,38 @@
 # Word Work
 
-En lugn, distraktionsfri ordbehandlare för kulturjournalister och författare. Den körs lokalt i en Docker-container (Chainguard/Wolfi) och används i webbläsaren.
+En lugn, distraktionsfri ordbehandlare för kulturjournalister och författare (detta fokus kan ändras i `backend/app/ai.py`). Den körs lokalt i en Docker-container och används i webbläsaren.
 
-Se [PLAN.md](PLAN.md) för målbilden och [PROJEKTPLAN.md](PROJEKTPLAN.md) för arkitektur och faser.
+Word Work är mer eller mindre byggd med hjälp av olika AI-verktyg, Claude (Opus 5.5), Pi (qwen 3.6) etc.
+
+Word Work har stöd för att använda AI i gränssnittet - dock så används inte AI för att skriva texter, utan används mer som bollplank och assistent, därav används ett gem som symbol för AI - som den irriterande assistenten i gamla Officeprogram 🙂.
+
 
 ## Kom igång
 
 Du behöver Docker (t.ex. Docker Desktop eller OrbStack).
 
 ```sh
+cp .env.example .env   # egna inställningar: eventuell AI-server, modell, datamapp …
 docker compose up -d --build
 ```
 
+AI-stödet använder en Ollama-server på den egna datorn och den första chattmodellen den listar om ingen anges. Egen server, modell och eventuell API-nyckel anger du i `.env`, som inte checkas in. Se *Konfiguration*.
+
 Öppna sedan <http://localhost:8080>.
 
-Texterna sparas som vanliga Markdown-filer i mappen `./data` bredvid projektet. Ange en annan mapp med `WW_DATA_PATH`:
-
-```sh
-WW_DATA_PATH=~/Dokument/Texter docker compose up -d
-```
+Texterna sparas som vanliga Markdown-filer i mappen `./data` bredvid projektet. Ange en annan mapp med `WW_DATA_PATH` i `.env`, till exempel `WW_DATA_PATH=~/Dokument/Texter`.
 
 ## Så fungerar det
 
 - **Skriv / Markdown.** Växla vy med knapparna högst upp eller med ⌘/ (Ctrl+/ i Windows och Linux).
   - I Skriv-vyn ser du formateringen: rubriker, fetstil, kursiv, citat och listor.
   - I Markdown-vyn ser du källtexten.
-- **Metadata** kan ligga som YAML-frontmatter (`---` … `---`) först i filen. Den visas och redigeras i Markdown-vyn, döljs i Skriv-vyn och räknas inte i ord eller analys.
+- **Metadata** (knappen med etikettikonen) sparas som YAML-frontmatter (`---` … `---`) först i filen. Den döljs i Skriv-vyn och räknas inte i ord eller analys.
+  - I panelen fyller du i *Rubrik* (`title`), *Ingress* (`lead`), *Byline* (`author`), *Beställare* (`client`), *Deadline* (`deadline`) och *Längdmål* (`length`, till exempel `4500 tecken` eller `800 ord`).
+  - Längdmålet visas som en mätare i statusraden. Den blir orange när texten är mer än 5 % för lång.
+  - Deadline visas i statusraden ("Deadline i morgon"), med accentfärg när det är tre dagar kvar eller mindre och röd när den har passerat.
+  - Rubriken blir dokumenttitel vid export. Står samma rubrik först i texten tas den bort i exporten, så att den inte syns två gånger.
+  - Övriga fält och fält med flera värden (listor) visas, men redigeras i Markdown-vyn.
 - **Allt är Markdown.** Endast formatering som Markdown kan uttrycka går att använda. Det finns inga typsnitt, färger eller understrykningar i själva texten. Klistrar du in formaterad text rensas sådant bort.
 - **Typsnitt och tema** väljs under *Inställningar* och gäller alltid hela texten. Du kan också ställa in storlek, radavstånd, textbredd, dimning av andra stycken och skrivmaskinsläge.
 - **Inställningarna sparas i datamappen** (`data/.wordwork/settings.json`), liksom valet av AI-modell. De följer därför med till en annan webbläsare och finns kvar efter en ominstallation. Bara vilken vy och vilket dokument som var öppet senast sparas i webbläsaren, liksom hur många ord du skrivit i dag.
@@ -51,7 +58,12 @@ WW_DATA_PATH=~/Dokument/Texter docker compose up -d
   - Texten kan klistras in direkt i WordPress eller ett annat publiceringssystem.
   - Frontmatter följer inte med. Huvudrubriken kan väljas bort, eftersom många publiceringssystem har ett eget rubrikfält.
 - **Ladda ner allt** (*Dokument → Ladda ner allt (zip)*) ger hela datamappen som en zip-fil: dokument, versioner, AI-samtal, papperskorg och inställningar.
-- **Gränssnittet tonas bort** medan du skriver och kommer tillbaka när du rör musen. Med tangentbordet når du knapparna med Tab.
+- **Gränssnittet tonas bort** medan du skriver och kommer tillbaka när du rör musen. Knapparna i verktygsraden är ikoner, och när du håller muspekaren över en ikon visas vad den gör och dess kortkommando. Med tangentbordet når du knapparna med Tab, och skärmläsare läser upp deras namn.
+- **Egna anteckningar** (⌘⌥M / Ctrl+Alt+M, eller högerklick → *Gör till egen anteckning*):
+  - Gör om stycket till en gul lapp för dig själv.
+  - Enter sist i lappen ger ett vanligt stycke efter den. Backsteg i en tom lapp gör den till ett vanligt stycke.
+  - I filen är anteckningen en HTML-kommentar på egen rad (`<!-- Kolla siffran med kommunen -->`), så den syns inte heller när texten visas i andra Markdown-program.
+  - Anteckningar räknas inte i ord, tecken eller analys och följer aldrig med vid export eller *Kopiera för publicering*. De skickas däremot med till AI-assistenten som en del av texten.
 - **Dagens skrivmål:** ställ in ett antal ord per dag under *Inställningar*. Statusraden visar hur många ord du skrivit i dag, i alla dokument.
 - **Typografi:**
   - **Infoga tecken** (knappen *Tecken*, ⌘. / Ctrl+. eller högerklick → *Infoga tecken …*). Panelen har svenska citattecken, tankstreck, hårda och smala mellanslag, ellips, paragraftecken, bråk och bokstäver med accent. Sök på namn, till exempel "tankstreck" eller "grader". Piltangenterna flyttar, Enter infogar och stänger, och ett klick infogar och låter panelen vara öppen. Överst visas de senast använda tecknen.
@@ -80,17 +92,21 @@ WW_DATA_PATH=~/Dokument/Texter docker compose up -d
   - LIX med tolkningsskala enligt lix.se, OVIX, ord per mening, andel långa ord och lästid.
   - De vanligaste orden. Klicka på ett ord för att markera alla förekomster i texten.
   - De längsta meningarna. Klicka för att hoppa till en mening.
+  - *Markera meningar längre än … ord i texten* (standard 30) stryker under alla långa meningar i Skriv-vyn medan du skriver.
+  - **Nominalstil:** antal substantiveringar (ord på -ning, -het, -else, -tion, -itet) per 100 ord, med en grov bedömning och de vanligaste orden. Det är ingen riktig nominalkvot, eftersom en sådan kräver ordklassanalys.
+  - **Citat och repliker:** citat inom citattecken (minst tre ord) och stycken som börjar med pratminus. Klicka för att hitta ett citat i texten. *Kopiera listan* ger en numrerad lista att stämma av mot källor och intervjuer.
   - Markerar du minst några ord gäller analysen bara markeringen.
 - **Exportera** (knappen *Exportera* eller ⌘E / Ctrl+E) till Word (.docx), OpenDocument (.odt), RTF, HTML, Markdown eller ren text.
   - Alla exporter har A4-format. Word, OpenDocument och RTF har 2,5 cm marginaler, och HTML skrivs ut på A4.
-  - För Word och OpenDocument finns tre mallar, alla med sidnummer: *Standard* (Pandocs typsnitt), *Manus* (Times 12 p, 1,5 radavstånd, indrag) och *Artikel* (Georgia 11 p, luft mellan stycken).
+  - För Word och OpenDocument finns tre mallar, alla med sidnummer: *Standard* (Cambria 12 p, rubriker i Calibri), *Manus* (Times 12 p, 1,5 radavstånd, indrag) och *Artikel* (Georgia 11 p, luft mellan stycken).
+  - **Ny sida före kapitel:** välj *Vid rubriknivå 1 (#)* eller *Vid rubriknivå 2 (##)* i exportdialogen, så börjar varje kapitel på en ny sida. Det gäller Word, OpenDocument och RTF, och för HTML vid utskrift. Före den första rubriken blir det ingen sidbrytning om inget står före den. Valet sparas till nästa export.
   - `title` och `author` i frontmatter blir dokumentegenskaper. Dokumentets språk sätts till svenska.
   - Citattecken och tankstreck exporteras exakt som du skrivit dem.
 - **Importera** DOCX, ODT, RTF, HTML, Markdown och text via *Dokument → Importera …*, eller genom att släppa filer i fönstret.
   - Formatering som inte finns i Markdown (understrykning, typsnitt, färger) tas bort. Bilder tas bort.
   - Tabeller blir ett stycke per rad. Fotnoter blir upphöjda siffror med en lista *Fotnoter* sist.
   - Titel och författare från dokumentet hamnar i frontmatter.
-- **AI-assistent** (knappen *AI* eller ⌘J / Ctrl+J) via Ollama:
+- **AI-assistent** (gemet i verktygsraden – en blinkning åt kontorsprogrammens gamla hjälpreda – eller ⌘J / Ctrl+J) via Ollama eller en OpenAI-kompatibel server (se *AI-server* nedan):
   - AI:n **föreslår men skriver aldrig i texten**. Det finns ingen knapp som infogar AI-text, och svaren visas bara i panelen.
   - Snabbval: granska språket, hitta upprepningar, stramare text, struktur och dramaturgi, fakta att kontrollera. Du kan också ställa egna frågor och följdfrågor.
   - Markera minst några ord för att frågan ska gälla just det avsnittet.
@@ -110,6 +126,7 @@ WW_DATA_PATH=~/Dokument/Texter docker compose up -d
 | ⌘F / Ctrl+F | Sök (⌘⌥F / Ctrl+Alt+F: sök och ersätt) |
 | ⌘G / Ctrl+G, F3 | Nästa träff (med Shift: föregående) |
 | ⌘⇧C / Ctrl+Shift+C | Kopiera för publicering |
+| ⌘⌥M / Ctrl+Alt+M | Egen anteckning |
 | ⌘J / Ctrl+J | AI-assistent |
 | ⌘. / Ctrl+. | Infoga tecken |
 | F1 | Lista över kortkommandon |
@@ -122,20 +139,48 @@ WW_DATA_PATH=~/Dokument/Texter docker compose up -d
 | `WW_DATA_PATH` | `./data` | Mapp på din dator för texterna (compose) |
 | `WW_SNAPSHOT_MINUTES` | `5` | Minsta tid mellan automatiska versioner |
 | `WW_ALLOWED_HOSTS` | `localhost,127.0.0.1,::1` | Värdnamn som får användas för att nå appen. Lägg till t.ex. datorns namn om du når den på annat sätt. `*` stänger av kontrollen. |
-| `WW_OLLAMA_URL` | `https://ollama.dglive.net` | Ollama-instans. Lokal Ollama: `http://host.docker.internal:11434`. Tom sträng (`WW_OLLAMA_URL=`) stänger av AI-stödet. |
-| `WW_OLLAMA_MODEL` | `qwen3.6:35b` | Förvald modell (kan bytas i AI-panelen) |
+| `WW_AI_API` | `ollama` | `ollama` (Ollamas eget API) eller `openai` (OpenAI-kompatibelt API) |
+| `WW_AI_URL` | `http://host.docker.internal:11434` (lokal Ollama; `http://localhost:11434` utan Docker) | AI-serverns adress. Tom adress (`WW_AI_URL=`) stänger av AI-stödet. Äldre namn: `WW_OLLAMA_URL`. |
+| `WW_AI_MODEL` | tom | Förvald modell (kan bytas i AI-panelen). Tom = första modellen i listan. Äldre namn: `WW_OLLAMA_MODEL`. |
+| `WW_AI_KEY` | – | API-nyckel för tjänster som kräver det. Skickas som `Authorization: Bearer …` och visas aldrig i webbläsaren. Alternativ: `WW_AI_KEY_FILE` med sökväg till en fil (t.ex. en Docker-secret). |
+
+### AI-server
+
+**Ollama** (standard) använder Ollamas eget API. Där styr appen kontextfönstret, så att långa texter får plats, och *Tänk efter först* slår modellens resonemang av och på.
+
+**OpenAI-kompatibla servrar** (`WW_AI_API=openai`) fungerar med till exempel OpenAI, OpenRouter, vLLM, LM Studio, llama.cpp-server och Ollamas eget `/v1`-API. Ange basadressen; `/v1` läggs till om den saknas. Exempel i en `.env`-fil bredvid `docker-compose.yml` (`.env` checkas inte in):
+
+```shell
+WW_AI_API=openai
+WW_AI_URL=https://api.openai.com/v1
+WW_AI_MODEL=gpt-4.1-mini
+WW_AI_KEY=sk-…
+```
+
+Lokal LM Studio: `WW_AI_URL=http://host.docker.internal:1234`, utan nyckel.
+
+Begränsningar i OpenAI-läget:
+
+- Kontextfönstret bestäms av servern. Mycket långa texter kan därför kortas av utan förvarning, beroende på hur servern är inställd.
+- *Tänk efter först* visas inte, eftersom det inte går att styra. Resonemang som servern skickar visas ändå, både i fälten `reasoning_content` och `reasoning` och som `<think>`-taggar.
+- Modellistan visar bara namn. Inbäddnings-, bild- och ljudmodeller sorteras bort utifrån namnet.
+- Listar servern inga modeller används `WW_AI_MODEL`.
+- Godtar modellen inte parametern `temperature` (som vissa resonerande modeller) skickas frågan om utan den.
 
 ## Drift
 
 ### Säkerhet
+
 - Porten binds till `127.0.0.1`, så appen nås bara från den egna datorn.
 - Appen godtar bara de värdnamn som står i `WW_ALLOWED_HOSTS`. Det skyddar mot DNS-rebinding, där en främmande webbplats försöker läsa dina texter via webbläsaren.
 - Sidan skickas med en strikt Content-Security-Policy och andra säkerhetshuvuden. Den laddar ingenting utifrån.
 - Containern körs som en användare utan root-rättigheter, på Chainguards minimala image utan skal.
-- AI-frågor skickar texten till Ollama-servern i `WW_OLLAMA_URL`. Använd en lokal instans om texterna inte får lämna datorn.
+- AI-frågor skickar texten till AI-servern i `WW_AI_URL`. Använd en lokal instans om texterna inte får lämna datorn. En API-nyckel stannar på servern och skickas aldrig till webbläsaren.
 
 ### Säkerhetskopiering
+
 Allt ligger i datamappen (`./data` eller `WW_DATA_PATH`):
+
 - dokumenten som `.md`
 - historiken i `.history/`
 - papperskorgen i `.trash/`
@@ -146,6 +191,7 @@ Allt ligger i datamappen (`./data` eller `WW_DATA_PATH`):
 Det enklaste är *Dokument → Ladda ner allt (zip)*. Du kan också kopiera mappen, till exempel med Time Machine, `rsync` eller en molnsynkad mapp, så har du allt. Det går bra att säkerhetskopiera medan appen körs, eftersom filer alltid skrivs helt innan de ersätts.
 
 ### Uppdatering
+
 ```sh
 git pull
 docker compose up -d --build
@@ -153,12 +199,14 @@ docker compose up -d --build
 Datamappen påverkas inte av en uppdatering. Flikar som redan är öppna visar *Word Work har uppdaterats* med knappen *Ladda om*. Ladda om innan du fortsätter, eftersom den gamla koden annars körs vidare i fliken.
 
 ### Felsökning
+
 - **Appen startar men visar "Kan inte skriva i datamappen".** Rättigheterna på mappen tillåter inte containerns användare att skriva. Kör `chmod 755 data`, eller `chmod -R u+rwX,go+rX data`, och starta om.
 - **"Okänt värdnamn".** Du når appen via ett namn som inte står i `WW_ALLOWED_HOSTS`. Lägg till det.
-- **Ingen AI-knapp.** Ollama-servern kan inte nås eller har ingen chattmodell. Se `curl http://localhost:8080/api/ai/status`.
+- **Ingen AI-knapp.** AI-servern kan inte nås, har ingen chattmodell, eller så godtogs inte API-nyckeln. `curl http://localhost:8080/api/ai/status` visar orsaken.
 - **Status och version:** `curl http://localhost:8080/api/health`.
 
 ### Skanning och SBOM
+
 Imagen bygger på Chainguards images, som har få kända sårbarheter. Kontrollera själv med något av:
 ```sh
 docker scout cves word-work:dev           # Docker Scout
@@ -190,7 +238,7 @@ npm run build                          # typkontroll + produktionsbygge
 
 ### Lagringsformat
 
-```
+```shell
 data/
   Min text.md                       ← aktuellt dokument
   .history/Min text/index.json      ← versioner (metadata)
@@ -205,10 +253,20 @@ Ett AI-samtal är en JSON-fil med `id`, `created`, `updated`, `model` och `messa
 
 ## Licenser
 
-- **Typsnitt:** Literata, Source Sans 3 och IBM Plex Mono, SIL Open Font License 1.1, via Fontsource.
-- **Stavningsordlista:** "Den stora svenska ordlistan" av Göran Andersson, GNU LGPL 3.0.
-- **Synonymer:** Synlex (Folkets synonymlexikon) av Viggo Kann, KTH, i LibreOffice-konvertering.
-- **Stavningsmotor:** spylls (MPL 2.0).
-- **Konvertering:** Pandoc (GPL 2+), som körs som separat program via pypandoc_binary.
+Word Work har licensen **Apache License 2.0**, Copyright 2026 Mikke Schirén. Se [LICENSE](LICENSE) och [NOTICE](NOTICE).
 
-Se `backend/resources/sv/SOURCES.txt` för källor och licenstexter.
+Appen innehåller eller använder komponenter från tredje part med egna licenser. Alla listas, med version och licens, i [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md), och standardlicenstexterna finns i [LICENSES/](LICENSES/). I Docker-imagen ligger allt i `/app/licenses/`. Där skapas också `THIRD_PARTY_NOTICES.txt` vid bygget, med de fullständiga licenstexterna för de paket som faktiskt installerats.
+
+- **Pandoc** (GPL 2.0 eller senare) används för import och export. Det körs som ett separat program och är inte länkat med Word Works kod, men följer med i Docker-imagen. Den som sprider imagen sprider därmed också Pandoc. Licenstexten och länken till källkoden för exakt den versionen finns i `/app/licenses/`.
+- **Stavningsordlistan** "Den stora svenska ordlistan" av Göran Andersson har licensen LGPL 3.0. Den ligger som separata, oförändrade datafiler i `backend/resources/sv/` och kan bytas ut.
+- **Synonymerna** kommer från Synlex (Folkets synonymlexikon) av Viggo Kann, KTH, i LibreOffice-konvertering. Den licensen tillåter fri användning så länge upphovsrättsnotisen behålls. Filen är omkodad till UTF-8, och det framgår av `SOURCES.txt`.
+- **Typsnitten** Literata, Source Sans 3 och IBM Plex Mono har licensen SIL Open Font License 1.1 och kommer via Fontsource.
+- **Stavningsmotorn** spylls och certifi har MPL 2.0. Övriga Python- och npm-paket har MIT, BSD, Apache 2.0 eller PSF. DOMPurify har MPL 2.0 eller Apache 2.0, valfritt.
+- **Export-mallarna** i `backend/resources/templates/` skapas av `backend/tools/make_templates.py`. De bygger inte på Pandocs referensdokument: DOCX utgår från python-docx tomma dokument (MIT), och ODT byggs från grunden. Mallarna har därför samma licens som Word Work.
+
+Förteckningen uppdateras med:
+
+```shell
+node frontend/scripts/notices.mjs --json > /tmp/npm.json
+backend/.venv/bin/python backend/tools/notices.py --markdown THIRD_PARTY_LICENSES.md --npm-json /tmp/npm.json
+```

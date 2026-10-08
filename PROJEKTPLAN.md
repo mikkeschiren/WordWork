@@ -251,4 +251,46 @@ Baserad på `PLAN.md`. Målet är en distraktionsfri ordbehandlare för kulturjo
   - **Servern sparar AI-svaren:** `/api/ai/chat` tar emot `document_name`, `chat_id` och `label`. I `finally` sparas fråga och svar, även när webbläsaren kopplar ner. Svaret får då etiketten "Avbrutet". Klienten skickar inte längre `PUT` för samtal.
   - **Lokal reservkopia** (`unsaved.ts`): misslyckas en sparning (nätverksfel eller 5xx) sparas texten i `localStorage` och skickas igen var femte sekund, vid fokus och vid `online`. Reservkopian skrivs också vid `beforeunload`. När dokumentet öppnas erbjuds en reservkopia som skiljer sig från serverns text tillbaka. Den gamla texten läggs då i historiken.
   - **Ladda ner allt** (`GET /api/backup`): hela datamappen som zip.
-- **Kvar efter v1 (förslag):** metadatapanel för frontmatter, nominalkvot, utvärdering av gemma4 för bättre svenska, CI-arbetsflöde (`.github/` kunde inte skrivas härifrån).
+- **Version 1.4.0 (2026-10-07) – för kulturjournalister, ikoner:**
+  - **Metadatapanel** (`frontmatter.ts`):
+    - En egen minimal YAML-hantering för fält med ett värde per rad. Bara panelens fält skrivs om; kommentarer, listor och andra nycklar lämnas orörda. Värden citeras när YAML annars skulle tolka dem fel.
+    - Längdmål och deadline visas i statusraden.
+    - Exporten tar bort en rubrik först i texten som är identisk med `title`.
+  - **Egna anteckningar** (`notes.ts`):
+    - En TipTap-nod med egen Markdown-tokenizer för HTML-kommentarer på egen rad.
+    - Anteckningarna tas bort ur statistik (`getPlainText`), *Kopiera för publicering* och alla exporter (`strip_notes` i `convert.py`, utom i kodblock).
+  - **Citatlista och nominalstil** (`stats.ts`) i Analys-panelen.
+    - En riktig nominalkvot kräver ordklasstaggning. Vi undersökte DSSO-ordlistans böjningsflaggor, men de skiljer inte ordklasser åt tillräckligt säkert. Därför räknas substantiveringar med snäva ändelsemönster, och det står tydligt i appen att det är en uppskattning.
+  - **Långa meningar** (`longsentences.ts`): ett ProseMirror-tillägg som delar meningar som LIX-beräkningen. Vid ändringar räknas bara de ändrade styckena om. Gränsen sparas i inställningarna.
+  - **Ikoner** (`icons.ts`): verktygsraden har bara egna linjeikoner (SVG, `currentColor`), med `aria-label` och `title` som visar namn och kortkommando.
+  - **Rättning:** i sökningens stegvisa uppdatering missades stycken där text bara togs bort (`from === to`). Nu söks stycket om.
+- **Version 1.4.1:** AI-knappen har en gem-ikon, en blinkning åt kontorsprogrammens gamla hjälpreda. Det är ett vanligt gem utan ansikte, och verktygstipset frågar om du vill ha hjälp.
+- **Version 1.5.0 (2026-10-07) – ny sida före kapitel vid export:**
+  - Val i exportdialogen (nej, nivå 1 eller nivå 2), som skickas som `chapters` till `/api/documents/{namn}/export`.
+  - Lua-filtret `filters/chapters.lua` lägger en sidbrytning före varje rubrik på vald nivå, utom före den första om inget står före den.
+  - Brytningen görs på olika sätt per format:
+    - Word: ett 1 pt högt stycke med `w:br w:type="page"`.
+    - OpenDocument: ett stycke med stilen `Pagebreak` (`break-after: page`), som nu finns i alla tre ODT-mallarna (`tools/make_templates.py`).
+    - RTF: `\page`.
+    - HTML: `break-after: page` vid utskrift.
+  - Markdown och ren text påverkas inte.
+  - Kontrollerat genom att konvertera till PDF med LibreOffice: varje kapitel börjar överst på en ny sida.
+  - Manuella sidbrytningar, scenbrytningar och kapitelnavigering väntar (se samtalet om bokskrivande).
+- **Version 1.6.0 (2026-10-08) – OpenAI-kompatibla AI-servrar:**
+  - `WW_AI_API=openai` använder `ai_openai.py` (`/v1/models`, `/v1/chat/completions` med SSE) med samma gränssnitt som `OllamaClient`. Panelen, de sparade samtalen och regeln om att AI:n aldrig skriver i texten är oförändrade.
+  - Nya variabler: `WW_AI_URL`, `WW_AI_MODEL`, `WW_AI_KEY` och `WW_AI_KEY_FILE`. `WW_OLLAMA_*` fungerar fortfarande. Nyckeln skickas som Bearer-huvud och finns aldrig i något API-svar.
+  - Resonemang fångas från `reasoning_content`, `reasoning` och `<think>`-taggar. Taggar som delats mellan två strömmade bitar fångas också.
+  - Avvisar servern `temperature` eller `stream_options` skickas frågan om utan dem.
+  - `/api/ai/status` har nu fälten `api` och `think_control`. Panelen döljer *Tänk efter först* när det inte går att styra.
+  - Testat mot en simulerad OpenAI-server (`tests/test_ai_openai.py`). En riktig server gick inte att nå från utvecklingsmiljön.
+- **Version 1.6.1 (2026-10-08) – inställningar i .env:**
+  - Standardvärdena är nu generiska: lokal Ollama (`http://host.docker.internal:11434` i Docker, `http://localhost:11434` utan) och ingen förvald modell, så att den första chattmodellen på servern används.
+  - Våra egna värden (`ollama.dglive.net`, `qwen3.6:35b`) ligger i `.env`, som inte checkas in och inte kommer med i imagen (`.dockerignore`).
+  - `.env.example` innehåller alla inställningar med standardvärden och förklaringar.
+- **Version 1.7.0 (2026-10-08) – licens:**
+  - Word Work har licensen Apache 2.0, Copyright 2026 Mikke Schirén. Det finns nu `LICENSE`, `NOTICE`, `THIRD_PARTY_LICENSES.md` och `LICENSES/` (texterna för GPL-2.0, GPL-3.0, LGPL-3.0 och MPL-2.0).
+  - Imagen har `/app/licenses/` med `THIRD_PARTY_NOTICES.txt`, som skapas vid bygget med `frontend/scripts/notices.mjs` och `backend/tools/notices.py` utifrån de paket som faktiskt installerats. Imagen har också OCI-etiketterna `licenses=Apache-2.0` och `authors`.
+  - Export-mallarna är omgjorda så att de inte bygger på Pandocs GPL-licensierade referensdokument. DOCX utgår från python-docx tomma dokument (MIT), och ODT byggs från grunden. Standardmallen är nu Cambria 12 p med rubriker i Calibri.
+  - Kontrollerat genom att konvertera till PDF med LibreOffice: A4, sidnummer, kapitelbrytning, titel, författare, fotnoter och citat fungerar i alla tre mallarna och båda formaten.
+  - Pandoc (GPL) körs som separat program. Den som sprider imagen ska låta licenstexten och källkodslänken följa med, och det gör de i `/app/licenses/`.
+- **Kvar efter v1 (förslag):** utvärdering av gemma4 för bättre svenska, CI-arbetsflöde (`.github/` kunde inte skrivas härifrån).

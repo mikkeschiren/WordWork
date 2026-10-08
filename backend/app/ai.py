@@ -1,4 +1,5 @@
-"""AI-assistent via Ollama (lokal eller extern instans).
+"""AI-assistent via Ollama (lokal eller extern instans). Se ai_openai.py för
+OpenAI-kompatibla servrar.
 
 Grundregel: AI:n skriver aldrig i dokumentet. Den här modulen har ingen
 åtkomst till lagringen – den får bara den text som klienten skickar med som
@@ -124,6 +125,9 @@ def build_messages(
 
 
 class OllamaClient:
+    label = "Ollama-servern"
+    think_control = True  # "Tänk efter först" styrs med Ollamas think-flagga
+
     def __init__(self, base_url: str, default_model: str, transport: httpx.AsyncBaseTransport | None = None):
         self.base_url = base_url.rstrip("/")
         self.default_model = default_model

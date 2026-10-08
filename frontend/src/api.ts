@@ -39,6 +39,9 @@ export interface AIStatus {
   external?: boolean;
   default_model?: string;
   quick?: string[];
+  api?: "ollama" | "openai";
+  /** Kan "Tänk efter först" styras? (Bara mot Ollama.) */
+  think_control?: boolean;
 }
 
 export interface AIModel {

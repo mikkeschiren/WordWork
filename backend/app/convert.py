@@ -60,7 +60,7 @@ EXPORT_FORMATS: dict[str, ExportFormat] = {
 }
 
 TEMPLATE_LABELS = {
-    "standard": "Standard – Pandocs typsnitt",
+    "standard": "Standard – Cambria 12 p, rubriker i Calibri",
     "manus": "Manus – Times 12 p, 1,5 radavstånd, indrag",
     "artikel": "Artikel – Georgia 11 p, luft mellan stycken",
 }

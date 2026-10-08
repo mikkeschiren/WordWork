@@ -3,29 +3,31 @@
 Körs vid behov av en utvecklare – resultatet ligger incheckat i
 backend/resources/templates/ och behövs inte vid bygget av imagen.
 
-    pip install python-docx lxml pypandoc_binary
+    pip install python-docx lxml
     python tools/make_templates.py
 
-Mallarna utgår från Pandocs egna referensdokument, så alla stilnamn som
-Pandoc använder finns kvar. Alla mallar – även Standard – har A4 och
-sidnummer; Pandocs egna referensdokument är i amerikanskt Letter-format.
+Mallarna bygger INTE på Pandocs referensdokument (som omfattas av GPL):
+  - DOCX utgår från python-docx inbyggda tomma dokument (MIT-licens), och
+    alla stilar som Pandoc använder definieras här.
+  - ODT byggs helt från grunden.
+Mallarna är därför en del av Word Work och har samma licens (Apache 2.0).
+Alla har A4, 2,5 cm marginaler och sidnummer i sidfoten.
 """
 
 from __future__ import annotations
 
 import io
-import subprocess
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
+from xml.sax.saxutils import quoteattr
 
-import pypandoc
 from docx import Document
+from docx.enum.style import WD_STYLE_TYPE
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from docx.shared import Cm, Pt
-from lxml import etree
+from docx.shared import Cm, Pt, RGBColor
 
 OUT = Path(__file__).resolve().parent.parent / "resources" / "templates"
 
@@ -38,32 +40,31 @@ class Spec:
     line: float  # radavstånd, multipel
     indent_cm: float  # första-radsindrag (0 = inget)
     space_after_pt: float
+    heading_font: str = ""  # tom = samma som brödtexten
     margin_cm: float = 2.5
-    restyle: bool = True  # False = behåll Pandocs typsnitt, sätt bara A4/marginaler/sidnummer
     h1: float = 16
     h2: float = 13
     h3: float = 12
 
+    @property
+    def hfont(self) -> str:
+        return self.heading_font or self.font
+
 
 SPECS = [
-    # Standard: Pandocs eget utseende, men A4 (svensk standard) och sidnummer.
-    Spec("standard", "", 0, 0, 0, 0, restyle=False),
+    # Standard: Cambria i brödtexten, Calibri i rubrikerna, luft mellan stycken.
+    Spec("standard", "Cambria", 12, 1.15, 0, 6, heading_font="Calibri", h1=16, h2=14, h3=12),
     # Standardmanus: Times 12 p, 1,5 radavstånd, indrag i stället för luft mellan stycken.
     Spec("manus", "Times New Roman", 12, 1.5, 1.0, 0, h1=14, h2=12, h3=12),
     # Artikel: luftig brödtext utan indrag, tydlig luft mellan stycken.
     Spec("artikel", "Georgia", 11, 1.15, 0, 8, h1=18, h2=14, h3=12),
 ]
 
-
-def default_reference(kind: str) -> bytes:
-    pandoc = pypandoc.get_pandoc_path()
-    return subprocess.run(
-        [pandoc, "--print-default-data-file", f"reference.{kind}"], check=True, capture_output=True
-    ).stdout
+MONO = "Courier New"
 
 
 # ---------------- DOCX ----------------
-def _set_font(style, font: str, size: float | None = None, bold: bool | None = None) -> None:
+def _set_font(style, font: str, size: float | None = None, bold: bool | None = None, italic: bool | None = False) -> None:
     style.font.name = font
     rpr = style.element.get_or_add_rPr()
     rfonts = rpr.find(qn("w:rFonts"))
@@ -78,10 +79,36 @@ def _set_font(style, font: str, size: float | None = None, bold: bool | None = N
         style.font.size = Pt(size)
     if bold is not None:
         style.font.bold = bold
-    style.font.color.rgb = None
-    color = rpr.find(qn("w:color"))
-    if color is not None:
-        rpr.remove(color)
+    if italic is not None:
+        style.font.italic = italic
+    style.font.color.rgb = RGBColor(0, 0, 0)
+
+
+def _style(styles, name: str, base: str | None, kind=WD_STYLE_TYPE.PARAGRAPH):
+    try:
+        st = styles[name]
+    except KeyError:
+        st = styles.add_style(name, kind)
+        st.quick_style = True
+    if base:
+        st.base_style = styles[base]
+    return st
+
+
+def _para(style, before: float = 0, after: float = 0, line: float | None = None, indent: float = 0,
+          left: float = 0, right: float = 0, align=None, keep_next: bool = False) -> None:
+    pf = style.paragraph_format
+    pf.space_before = Pt(before)
+    pf.space_after = Pt(after)
+    if line is not None:
+        pf.line_spacing_rule = WD_LINE_SPACING.MULTIPLE
+        pf.line_spacing = line
+    pf.first_line_indent = Cm(indent)
+    pf.left_indent = Cm(left)
+    pf.right_indent = Cm(right)
+    if align is not None:
+        pf.alignment = align
+    pf.keep_with_next = keep_next
 
 
 def _page_number_footer(section) -> None:
@@ -98,43 +125,53 @@ def _page_number_footer(section) -> None:
 
 
 def make_docx(spec: Spec) -> bytes:
-    doc = Document(io.BytesIO(default_reference("docx")))
-    styles = doc.styles
-    if spec.restyle:
+    doc = Document()  # python-docx tomma standarddokument (MIT)
+    st = doc.styles
+    C = WD_ALIGN_PARAGRAPH.CENTER
 
-        for name in ("Normal", "Body Text", "First Paragraph", "Compact", "Block Text", "Footnote Text"):
-            if name in [s.name for s in styles]:
-                _set_font(styles[name], spec.font, spec.size)
+    _set_font(st["Normal"], spec.font, spec.size)
+    _para(st["Normal"], after=0, line=spec.line)
 
-        for name in ("Body Text", "First Paragraph"):
-            pf = styles[name].paragraph_format
-            pf.line_spacing_rule = WD_LINE_SPACING.MULTIPLE
-            pf.line_spacing = spec.line
-            pf.space_before = Pt(0)
-            pf.space_after = Pt(spec.space_after_pt)
-            pf.first_line_indent = Cm(spec.indent_cm) if name == "Body Text" else Cm(0)
+    body = _style(st, "Body Text", "Normal")
+    _set_font(body, spec.font, spec.size)
+    _para(body, after=spec.space_after_pt, line=spec.line, indent=spec.indent_cm)
+    first = _style(st, "First Paragraph", "Body Text")
+    _para(first, after=spec.space_after_pt, line=spec.line, indent=0)
+    compact = _style(st, "Compact", "Body Text")
+    _para(compact, after=0, line=spec.line, indent=0)
+    block = _style(st, "Block Text", "Body Text")
+    _para(block, before=6, after=6, line=1.15, left=1, right=1)
 
-        bt = styles["Block Text"].paragraph_format
-        bt.left_indent = Cm(1)
-        bt.right_indent = Cm(1)
-        bt.line_spacing = 1.15
-        bt.space_before = Pt(6)
-        bt.space_after = Pt(6)
-        styles["Block Text"].font.italic = False
+    for level in range(1, 7):
+        hs = _style(st, f"Heading {level}", "Normal")
+        size = {1: spec.h1, 2: spec.h2, 3: spec.h3}.get(level, spec.size)
+        _set_font(hs, spec.hfont, size, bold=True)
+        _para(hs, before=spec.size * 1.5, after=spec.size * 0.5, line=1.0, keep_next=True)
 
-        for name, size in (("Heading 1", spec.h1), ("Heading 2", spec.h2), ("Heading 3", spec.h3)):
-            _set_font(styles[name], spec.font, size, bold=True)
-            styles[name].font.italic = False
-            pf = styles[name].paragraph_format
-            pf.space_before = Pt(spec.size * 1.5)
-            pf.space_after = Pt(spec.size * 0.5)
-            pf.keep_with_next = True
-        for name in ("Heading 4", "Heading 5", "Heading 6"):
-            _set_font(styles[name], spec.font, spec.size, bold=True)
+    title = _style(st, "Title", "Normal")
+    _set_font(title, spec.hfont, spec.h1 + 6, bold=True)
+    # python-docx standardtitel har en färgad linje under – ta bort den.
+    ppr = title.element.get_or_add_pPr()
+    for bdr in ppr.findall(qn("w:pBdr")):
+        ppr.remove(bdr)
+    _para(title, before=0, after=spec.size, line=1.0, align=C, keep_next=True)
+    for name, size in (("Subtitle", spec.h2), ("Author", spec.size), ("Date", spec.size)):
+        s = _style(st, name, "Normal")
+        _set_font(s, spec.font, size, italic=(name == "Subtitle"))
+        _para(s, after=spec.size * 0.5, line=1.0, align=C, keep_next=True)
+    abstract = _style(st, "Abstract", "Normal")
+    _set_font(abstract, spec.font, spec.size - 1)
+    _para(abstract, before=6, after=12, line=1.15, left=1, right=1)
 
-        for name, size in (("Title", spec.h1 + 6), ("Subtitle", spec.h2), ("Author", spec.size), ("Date", spec.size)):
-            if name in [s.name for s in styles]:
-                _set_font(styles[name], spec.font, size, bold=(name == "Title"))
+    fn = _style(st, "Footnote Text", "Normal")
+    _set_font(fn, spec.font, max(8, spec.size - 2))
+    _para(fn, line=1.0)
+    code = _style(st, "Source Code", "Normal")
+    _set_font(code, MONO, max(8, spec.size - 2))
+    _para(code, line=1.0)
+    verb = _style(st, "Verbatim Char", None, WD_STYLE_TYPE.CHARACTER)
+    _set_font(verb, MONO, max(8, spec.size - 2))
+    _set_font(_style(st, "Footer", "Normal"), spec.font, max(8, spec.size - 2))
 
     for section in doc.sections:
         for side in ("top_margin", "bottom_margin", "left_margin", "right_margin"):
@@ -143,11 +180,11 @@ def make_docx(spec: Spec) -> bytes:
         section.page_height = Cm(29.7)
         _page_number_footer(section)
 
-    # Pandoc läser bara stilarna – ta bort exempeltexten i referensdokumentet.
-    body = doc.element.body
-    for child in list(body):
+    # Pandoc läser bara stilarna – ta bort ev. innehåll.
+    root = doc.element.body
+    for child in list(root):
         if child.tag != qn("w:sectPr"):
-            body.remove(child)
+            root.remove(child)
 
     buf = io.BytesIO()
     doc.save(buf)
@@ -155,138 +192,130 @@ def make_docx(spec: Spec) -> bytes:
 
 
 # ---------------- ODT ----------------
-NS = {
-    "office": "urn:oasis:names:tc:opendocument:xmlns:office:1.0",
-    "style": "urn:oasis:names:tc:opendocument:xmlns:style:1.0",
-    "fo": "urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0",
-    "text": "urn:oasis:names:tc:opendocument:xmlns:text:1.0",
-    "svg": "urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0",
-}
+ODT_NS = (
+    'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" '
+    'xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" '
+    'xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" '
+    'xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" '
+    'xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" '
+    'xmlns:meta="urn:oasis:names:tc:opendocument:xmlns:meta:1.0" '
+    'xmlns:dc="http://purl.org/dc/elements/1.1/" '
+    'office:version="1.3"'
+)
 
 
-def q(prefix: str, name: str) -> str:
-    return f"{{{NS[prefix]}}}{name}"
+def _pstyle(name: str, display: str, parent: str | None, para: str = "", text: str = "", extra: str = "") -> str:
+    attrs = f'style:name="{name}" style:display-name={quoteattr(display)} style:family="paragraph"'
+    if parent:
+        attrs += f' style:parent-style-name="{parent}"'
+    inner = ""
+    if para:
+        inner += f"<style:paragraph-properties {para}/>"
+    if text:
+        inner += f"<style:text-properties {text}/>"
+    return f"<style:style {attrs} {extra}>{inner}</style:style>"
 
 
-def _child(parent, prefix: str, name: str):
-    el = parent.find(f"{prefix}:{name}", NS)
-    if el is None:
-        el = etree.SubElement(parent, q(prefix, name))
-    return el
+def _font(name: str, size: float | None = None, bold: bool = False, italic: bool = False) -> str:
+    t = f'style:font-name={quoteattr(name)} style:font-name-asian={quoteattr(name)} style:font-name-complex={quoteattr(name)}'
+    if size:
+        t += f' fo:font-size="{size}pt" style:font-size-asian="{size}pt" style:font-size-complex="{size}pt"'
+    w = "bold" if bold else "normal"
+    st = "italic" if italic else "normal"
+    t += f' fo:font-weight="{w}" style:font-weight-asian="{w}" style:font-weight-complex="{w}"'
+    t += f' fo:font-style="{st}" style:font-style-asian="{st}" style:font-style-complex="{st}"'
+    return t
 
 
 def make_odt(spec: Spec) -> bytes:
-    src = zipfile.ZipFile(io.BytesIO(default_reference("odt")))
-    root = etree.fromstring(src.read("styles.xml"))
-
-    # Typsnittsdeklaration
-    if spec.restyle:
-        decls = root.find("office:font-face-decls", NS)
-        face = etree.SubElement(decls, q("style", "font-face"))
-        face.set(q("style", "name"), spec.font)
-        face.set(q("svg", "font-family"), f"'{spec.font}'")
-        face.set(q("style", "font-family-generic"), "roman")
-
-    def text_props(style_el, size: float | None = None, bold: bool = False):
-        tp = _child(style_el, "style", "text-properties")
-        for attr in ("font-name", "font-name-asian", "font-name-complex"):
-            tp.set(q("style", attr), spec.font)
-        if size is not None:
-            for a in (q("fo", "font-size"), q("style", "font-size-asian"), q("style", "font-size-complex")):
-                tp.set(a, f"{size}pt")
-        if bold:
-            for a in (q("fo", "font-weight"), q("style", "font-weight-asian"), q("style", "font-weight-complex")):
-                tp.set(a, "bold")
-            # Pandocs standardmall har kursiv rubrik 2 – vi vill ha rak.
-            for a in (q("fo", "font-style"), q("style", "font-style-asian"), q("style", "font-style-complex")):
-                tp.set(a, "normal")
-        return tp
-
-    def para_props(style_el, **attrs):
-        pp = style_el.find("style:paragraph-properties", NS)
-        if pp is None:
-            pp = etree.Element(q("style", "paragraph-properties"))
-            style_el.insert(0, pp)
-        for k, v in attrs.items():
-            prefix, _, local = k.partition("_")
-            pp.set(q(prefix, local.replace("_", "-")), v)
-        return pp
-
-    def style(name: str, family: str = "paragraph", parent: str = "Standard"):
-        for el in root.iter(q("style", "style")):
-            if el.get(q("style", "name")) == name and el.get(q("style", "family")) == family:
-                return el
-        styles = root.find("office:styles", NS)
-        el = etree.SubElement(styles, q("style", "style"))
-        el.set(q("style", "name"), name)
-        el.set(q("style", "family"), family)
-        el.set(q("style", "parent-style-name"), parent)
-        return el
-
-    if spec.restyle:
-        default = next(
-            el for el in root.iter(q("style", "default-style")) if el.get(q("style", "family")) == "paragraph"
-        )
-        text_props(default, spec.size)
-
-        line = f"{round(spec.line * 100)}%"
-        after = f"{spec.space_after_pt}pt"
-        para_props(style("Text_20_body", parent="Standard"), fo_margin_top="0pt", fo_margin_bottom=after,
-                   fo_line_height=line, fo_text_indent=f"{spec.indent_cm}cm")
-        para_props(style("First_20_paragraph", parent="Text_20_body"), fo_text_indent="0cm")
-        para_props(style("Quotations", parent="Standard"), fo_margin_left="1cm", fo_margin_right="1cm",
-                   fo_margin_top="6pt", fo_margin_bottom="6pt", fo_line_height="115%", fo_text_indent="0cm")
-        text_props(style("Heading", parent="Standard"))
-        for level, size in ((1, spec.h1), (2, spec.h2), (3, spec.h3)):
-            h = style(f"Heading_20_{level}", parent="Heading")
-            text_props(h, size, bold=True)
-            para_props(h, fo_margin_top=f"{spec.size * 1.5}pt", fo_margin_bottom=f"{spec.size * 0.5}pt",
-                       fo_keep_with_next="always")
-        text_props(style("Title", parent="Heading"), spec.h1 + 6, bold=True)
-
-    # Sidbrytning före kapitel vid export (filters/chapters.lua): ett tomt stycke,
-    # 1 pt högt, som avslutar sidan.
-    pb = style("Pagebreak", parent="Standard")
-    para_props(pb, fo_break_after="page", fo_margin_top="0cm", fo_margin_bottom="0cm", fo_line_height="100%")
-    pb_text = _child(pb, "style", "text-properties")
-    pb_text.set(q("fo", "font-size"), "1pt")
-
-    # Sidlayout: A4, marginaler och sidnummer i sidfoten.
     m = f"{spec.margin_cm}cm"
-    auto = root.find("office:automatic-styles", NS)
-    layout = auto.find("style:page-layout", NS)
-    lp = _child(layout, "style", "page-layout-properties")
-    for k, v in (("page-width", "21cm"), ("page-height", "29.7cm"), ("margin-top", m),
-                 ("margin-bottom", m), ("margin-left", m), ("margin-right", m)):
-        lp.set(q("fo", k), v)
-    fstyle = _child(layout, "style", "footer-style")
-    hfp = _child(fstyle, "style", "header-footer-properties")
-    hfp.set(q("fo", "min-height"), "0.6cm")
-    hfp.set(q("fo", "margin-top"), "0.4cm")
-
-    footer_style = style("Footer", parent="Standard")
-    para_props(footer_style, fo_text_align="center")
-    master = root.find("office:master-styles/style:master-page", NS)
-    for old in master.findall("style:footer", NS):
-        master.remove(old)
-    footer = etree.SubElement(master, q("style", "footer"))
-    p = etree.SubElement(footer, q("text", "p"))
-    p.set(q("text", "style-name"), "Footer")
-    num = etree.SubElement(p, q("text", "page-number"))
-    num.set(q("text", "select-page"), "current")
-    num.text = "1"
-
+    line = f"{round(spec.line * 100)}%"
+    fonts = sorted({spec.font, spec.hfont, MONO})
+    faces = "".join(
+        f'<style:font-face style:name={quoteattr(f)} svg:font-family={quoteattr(repr(f))} '
+        f'style:font-family-generic="{"modern" if f == MONO else "roman"}"/>'
+        for f in fonts
+    )
+    small = max(8, spec.size - 2)
+    styles = [
+        f'<style:default-style style:family="paragraph"><style:paragraph-properties style:writing-mode="page"/>'
+        f'<style:text-properties {_font(spec.font, spec.size)} fo:language="sv" fo:country="SE"/></style:default-style>',
+        _pstyle("Standard", "Standard", None, extra='style:class="text"'),
+        _pstyle("Text_20_body", "Text body", "Standard",
+                f'fo:margin-top="0pt" fo:margin-bottom="{spec.space_after_pt}pt" fo:line-height="{line}" '
+                f'fo:text-indent="{spec.indent_cm}cm"', extra='style:class="text"'),
+        _pstyle("First_20_paragraph", "First paragraph", "Text_20_body", 'fo:text-indent="0cm"'),
+        _pstyle("Quotations", "Quotations", "Standard",
+                'fo:margin-left="1cm" fo:margin-right="1cm" fo:margin-top="6pt" fo:margin-bottom="6pt" '
+                'fo:line-height="115%" fo:text-indent="0cm"', extra='style:class="html"'),
+        _pstyle("Heading", "Heading", "Standard",
+                f'fo:margin-top="{spec.size * 1.5}pt" fo:margin-bottom="{spec.size * 0.5}pt" fo:keep-with-next="always"',
+                _font(spec.hfont, None, bold=True), extra='style:next-style-name="Text_20_body" style:class="text"'),
+    ]
+    for level in range(1, 7):
+        size = {1: spec.h1, 2: spec.h2, 3: spec.h3}.get(level, spec.size)
+        styles.append(_pstyle(f"Heading_20_{level}", f"Heading {level}", "Heading", "", _font(spec.hfont, size, bold=True),
+                              extra=f'style:default-outline-level="{level}" style:next-style-name="Text_20_body" style:class="text"'))
+    styles += [
+        _pstyle("Title", "Title", "Heading", 'fo:text-align="center" fo:margin-top="0pt"',
+                _font(spec.hfont, spec.h1 + 6, bold=True), extra='style:class="chapter"'),
+        _pstyle("Subtitle", "Subtitle", "Heading", 'fo:text-align="center"', _font(spec.font, spec.h2, italic=True),
+                extra='style:class="chapter"'),
+        _pstyle("Author", "Author", "Standard", 'fo:text-align="center" fo:margin-bottom="4pt"', _font(spec.font, spec.size)),
+        _pstyle("Date", "Date", "Standard", 'fo:text-align="center" fo:margin-bottom="12pt"', _font(spec.font, spec.size)),
+        _pstyle("Abstract", "Abstract", "Standard", 'fo:margin-left="1cm" fo:margin-right="1cm" fo:margin-bottom="12pt"',
+                _font(spec.font, spec.size - 1)),
+        _pstyle("Footnote", "Footnote", "Standard", 'fo:margin-left="0.5cm" fo:text-indent="-0.5cm"',
+                _font(spec.font, small), extra='style:class="extra"'),
+        _pstyle("Preformatted_20_Text", "Preformatted Text", "Standard", 'fo:margin-top="0pt" fo:margin-bottom="0pt"',
+                _font(MONO, small), extra='style:class="html"'),
+        _pstyle("Footer", "Footer", "Standard", 'fo:text-align="center"', _font(spec.font, small), extra='style:class="extra"'),
+        # Sidbrytning före kapitel vid export (filters/chapters.lua): ett tomt stycke, 1 pt högt, som avslutar sidan.
+        _pstyle("Pagebreak", "Pagebreak", "Standard",
+                'fo:break-after="page" fo:margin-top="0cm" fo:margin-bottom="0cm" fo:line-height="100%"', 'fo:font-size="1pt"'),
+        '<style:style style:name="Internet_20_link" style:display-name="Internet link" style:family="text">'
+        '<style:text-properties fo:color="#1a4f8a" style:text-underline-style="solid" style:text-underline-width="auto" '
+        'style:text-underline-color="font-color"/></style:style>',
+    ]
+    styles_xml = (
+        f'<?xml version="1.0" encoding="UTF-8"?><office:document-styles {ODT_NS}>'
+        f"<office:font-face-decls>{faces}</office:font-face-decls>"
+        f'<office:styles>{"".join(styles)}</office:styles>'
+        '<office:automatic-styles><style:page-layout style:name="pm1">'
+        f'<style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm" style:print-orientation="portrait" '
+        f'fo:margin-top="{m}" fo:margin-bottom="{m}" fo:margin-left="{m}" fo:margin-right="{m}"/>'
+        '<style:header-style/><style:footer-style><style:header-footer-properties fo:min-height="0.6cm" fo:margin-top="0.4cm"/>'
+        "</style:footer-style></style:page-layout></office:automatic-styles>"
+        '<office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1">'
+        '<style:footer><text:p text:style-name="Footer"><text:page-number text:select-page="current">1</text:page-number>'
+        "</text:p></style:footer></style:master-page></office:master-styles></office:document-styles>"
+    )
+    content_xml = (
+        f'<?xml version="1.0" encoding="UTF-8"?><office:document-content {ODT_NS}>'
+        "<office:automatic-styles/><office:body><office:text>"
+        '<text:p text:style-name="Standard"/></office:text></office:body></office:document-content>'
+    )
+    meta_xml = (
+        f'<?xml version="1.0" encoding="UTF-8"?><office:document-meta {ODT_NS}><office:meta>'
+        "<meta:generator>Word Work</meta:generator></office:meta></office:document-meta>"
+    )
+    manifest = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0" manifest:version="1.3">'
+        '<manifest:file-entry manifest:full-path="/" manifest:version="1.3" '
+        'manifest:media-type="application/vnd.oasis.opendocument.text"/>'
+        '<manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/>'
+        '<manifest:file-entry manifest:full-path="styles.xml" manifest:media-type="text/xml"/>'
+        '<manifest:file-entry manifest:full-path="meta.xml" manifest:media-type="text/xml"/>'
+        "</manifest:manifest>"
+    )
     out = io.BytesIO()
-    with zipfile.ZipFile(out, "w") as dst:
+    with zipfile.ZipFile(out, "w") as z:
         # mimetype måste ligga först och okomprimerad
-        dst.writestr(zipfile.ZipInfo("mimetype"), src.read("mimetype"), compress_type=zipfile.ZIP_STORED)
-        for info in src.infolist():
-            if info.filename == "mimetype":
-                continue
-            data = src.read(info.filename)
-            if info.filename == "styles.xml":
-                data = etree.tostring(root, xml_declaration=True, encoding="UTF-8")
-            dst.writestr(info.filename, data, compress_type=zipfile.ZIP_DEFLATED)
+        z.writestr(zipfile.ZipInfo("mimetype"), "application/vnd.oasis.opendocument.text", compress_type=zipfile.ZIP_STORED)
+        for name, data in (("content.xml", content_xml), ("styles.xml", styles_xml), ("meta.xml", meta_xml),
+                           ("META-INF/manifest.xml", manifest)):
+            z.writestr(zipfile.ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0)), data, compress_type=zipfile.ZIP_DEFLATED)
     return out.getvalue()
 
 

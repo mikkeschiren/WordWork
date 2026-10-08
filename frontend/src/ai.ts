@@ -137,7 +137,7 @@ export class AIPanel {
   }
 
   /**
-   * Kontrollerar med jämna mellanrum om Ollama-servern går att nå. Appen fungerar
+   * Kontrollerar med jämna mellanrum om AI-servern går att nå. Appen fungerar
    * alltid; AI-funktionen slås bara på och av.
    */
   monitor(onChange: (available: boolean) => void, intervalMs = 60_000): void {
@@ -331,7 +331,11 @@ export class AIPanel {
     });
     for (const m of this.models) {
       modelSelect.append(
-        h("option", { value: m.name, selected: m.name === this.model }, `${m.name} · ${m.parameters || `${m.size_gb} GB`}`),
+        h(
+          "option",
+          { value: m.name, selected: m.name === this.model },
+          m.parameters || m.size_gb ? `${m.name} · ${m.parameters || `${m.size_gb} GB`}` : m.name,
+        ),
       );
     }
     const thinkBox = h("input", {
@@ -367,12 +371,14 @@ export class AIPanel {
             "div",
             { class: "ai-settings" },
             h("label", { class: "field" }, h("span", {}, "Modell"), modelSelect),
-            h(
-              "label",
-              { class: "check small", title: "Modellen resonerar innan den svarar – träffsäkrare men långsammare" },
-              thinkBox,
-              h("span", {}, "Tänk efter först (noggrannare)"),
-            ),
+            this.status.think_control === false
+              ? ""
+              : h(
+                  "label",
+                  { class: "check small", title: "Modellen resonerar innan den svarar – träffsäkrare men långsammare" },
+                  thinkBox,
+                  h("span", {}, "Tänk efter först (noggrannare)"),
+                ),
           ),
       quick,
       h("div", { class: "ai-history" }, this.historySelect, this.deleteBtn),
@@ -561,7 +567,7 @@ export class AIPanel {
       details.addEventListener("toggle", () => (m.showThinking = details.open));
       el.append(details);
     } else if (m.pending && !m.content) {
-      el.append(h("p", { class: "meta" }, this.think ? "Tänker …" : "Skriver …"));
+      el.append(h("p", { class: "meta" }, this.think && this.status?.think_control !== false ? "Tänker …" : "Skriver …"));
     }
     if (m.content) {
       const body = h("div", { class: "ai-body" });

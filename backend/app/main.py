@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from . import __version__
 from .ai import QUICK_PROMPTS, AIError, OllamaClient, build_messages, context_size, is_external
+from .ai_openai import OpenAIClient
 from .config import Settings
 from .convert import EXPORT_FORMATS, MAX_IMPORT_BYTES, PAGED_FORMATS, TEMPLATE_LABELS, ConvertError, export_document, import_file
 from .language import Language, normalize_entry
@@ -161,11 +162,11 @@ def create_app(settings: Settings | None = None, ai_transport: httpx.AsyncBaseTr
     language = Language(settings.resources_dir, settings.data_dir / ".wordwork" / "ordlista.txt")
     app.state.language = language
 
-    ollama = (
-        OllamaClient(settings.ollama_url, settings.ollama_model, transport=ai_transport)
-        if settings.ollama_url
-        else None
-    )
+    ollama: OllamaClient | OpenAIClient | None = None
+    if settings.ollama_url and settings.ai_api == "openai":
+        ollama = OpenAIClient(settings.ollama_url, settings.ollama_model, settings.ai_key, transport=ai_transport)
+    elif settings.ollama_url:
+        ollama = OllamaClient(settings.ollama_url, settings.ollama_model, transport=ai_transport)
 
     @app.exception_handler(AIError)
     async def ai_error(_: Request, exc: AIError) -> JSONResponse:
@@ -190,11 +191,11 @@ def create_app(settings: Settings | None = None, ai_transport: httpx.AsyncBaseTr
             "language": language.ready,
         }
 
-    # ---------- AI (Ollama) ----------
+    # ---------- AI (Ollama eller OpenAI-kompatibel server) ----------
     @app.get("/api/ai/status")
     async def ai_status() -> dict:
         if ollama is None:
-            return {"enabled": False, "reason": "AI-stödet är avstängt (WW_OLLAMA_URL är tom)."}
+            return {"enabled": False, "reason": "AI-stödet är avstängt (WW_AI_URL är tom)."}
         available, reason = await ollama.availability()
         if not available:
             return {"enabled": False, "configured": True, "reason": reason}
@@ -204,6 +205,9 @@ def create_app(settings: Settings | None = None, ai_transport: httpx.AsyncBaseTr
             "external": is_external(settings.ollama_url),
             "default_model": settings.ollama_model,
             "quick": list(QUICK_PROMPTS),
+            "api": settings.ai_api,
+            # Kan "Tänk efter först" styras? (Bara i Ollama-läget.)
+            "think_control": ollama.think_control,
         }
 
     @app.get("/api/ai/models")
