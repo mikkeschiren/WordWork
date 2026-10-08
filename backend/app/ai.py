@@ -47,6 +47,9 @@ börjar med # är rubriker, > är citatblock och - är punktlistor.
 - Kommentera aldrig Markdown-tecknen (stjärnor, understreck, #, >) som om de vore fel, \
 typografi eller skräp. Föreslå inte att de ska tas bort eller bytas ut.
 - När du citerar texten: citera orden utan Markdown-tecken.
+- {==text==}{>>kommentar<<} är en kommentar som författaren har satt på den markerade \
+texten (t.ex. ”kolla källan”). Läsaren ser bara texten. Kommentarerna ska inte granskas \
+som text, men du får använda dem som bakgrund och svara på frågor om dem.
 - Rader som <!-- … --> är författarens egna anteckningar. De hör inte till texten och ska \
 inte granskas, men du får använda dem som bakgrund.
 - Metadata (rubrik, ingress, beställare, längdmål m.m.) står för sig, inte i texten.

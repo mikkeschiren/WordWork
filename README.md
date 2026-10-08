@@ -65,6 +65,12 @@ Texterna sparas som vanliga Markdown-filer i mappen `./data` bredvid projektet. 
   - Enter sist i lappen ger ett vanligt stycke efter den. Backsteg i en tom lapp gör den till ett vanligt stycke.
   - I filen är anteckningen en HTML-kommentar på egen rad (`<!-- Kolla siffran med kommunen -->`), så den syns inte heller när texten visas i andra Markdown-program.
   - Anteckningar räknas inte i ord, tecken eller analys och följer aldrig med vid export eller *Kopiera för publicering*. De skickas däremot med till AI-assistenten som en del av texten.
+- **Kommentarer** (markera ett eller flera ord och tryck ⌘⌥K / Ctrl+Alt+K, eller högerklick → *Kommentera …*):
+  - Korta noteringar på en viss formulering, till exempel ”Kolla upp källa” eller ”Sa hon verkligen så?”. Den kommenterade texten får gul bakgrund.
+  - Klicka på texten för att läsa kommentaren och ändra eller ta bort den. Under *Analys* finns en lista över alla kommentarer, och ett klick markerar stället i texten.
+  - I filen sparas kommentaren med CriticMarkup direkt i texten: `{==hon aldrig varit där==}{>>Sa hon verkligen så?<<}`. I Markdown-vyn syns den syntaxen, och markerad text där kan också kommenteras.
+  - Kommentarer räknas inte i ord eller tecken och följer aldrig med vid export eller *Kopiera för publicering* – bara den kommenterade texten blir kvar. AI-assistenten får dem som bakgrund och granskar dem inte som text.
+  - En kommentar gäller text inom ett stycke, och kommentarer kan inte överlappa varandra.
 - **Dagens skrivmål:** ställ in ett antal ord per dag under *Inställningar*. Statusraden visar hur många ord du skrivit i dag, i alla dokument.
 - **Typografi:**
   - **Infoga tecken** (knappen *Tecken*, ⌘. / Ctrl+. eller högerklick → *Infoga tecken …*). Panelen har svenska citattecken, tankstreck, hårda och smala mellanslag, ellips, paragraftecken, bråk och bokstäver med accent. Sök på namn, till exempel "tankstreck" eller "grader". Piltangenterna flyttar, Enter infogar och stänger, och ett klick infogar och låter panelen vara öppen. Överst visas de senast använda tecknen.
@@ -134,6 +140,7 @@ Texterna sparas som vanliga Markdown-filer i mappen `./data` bredvid projektet. 
 | ⌘G / Ctrl+G, F3 | Nästa träff (med Shift: föregående) |
 | ⌘⇧C / Ctrl+Shift+C | Kopiera för publicering |
 | ⌘⌥M / Ctrl+Alt+M | Egen anteckning |
+| ⌘⌥K / Ctrl+Alt+K | Kommentera markerad text |
 | ⌘J / Ctrl+J | AI-assistent |
 | ⌘. / Ctrl+. | Infoga tecken |
 | F1 | Lista över kortkommandon |
@@ -255,6 +262,8 @@ data/
   .wordwork/settings.json           ← inställningar
   .wordwork/ordlista.txt            ← egen ordlista
 ```
+
+Dokumenten är vanlig Markdown med valfri YAML-frontmatter. Egna anteckningar är HTML-kommentarer (`<!-- … -->`) och kommentarer på text är CriticMarkup (`{==text==}{>>kommentar<<}`).
 
 Ett AI-samtal är en JSON-fil med `id`, `created`, `updated`, `model` och `messages`, där varje meddelande har `role` (`user` eller `assistant`), `content` och ibland `label` (snabbval), `thinking` (resonemang), `meta` och `error`. Inställningsfilen är ett JSON-objekt med samma nycklar som i appen. Okända eller felaktiga värden ignoreras och ersätts med standardvärden.
 

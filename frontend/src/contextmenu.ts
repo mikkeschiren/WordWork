@@ -7,12 +7,16 @@ import { TextSelection } from "@tiptap/pm/state";
 import { api } from "./api";
 import { WORD_RE, wordAt, type SpellService, type WordRange } from "./spell";
 import { h, toast } from "./ui";
+import { commentAt } from "./comments";
 
 interface MenuDeps {
   spell: SpellService;
   replace: (from: number, to: number, text: string) => void;
   openChars: () => void;
   toggleNote: () => void;
+  /** Lägg till eller ändra en kommentar på intervallet. */
+  comment: (from: number, to: number) => void;
+  removeComment: (from: number, to: number) => void;
 }
 
 let current: HTMLElement | null = null;
@@ -43,6 +47,12 @@ function matchCase(original: string, replacement: string): string {
 export function openContextMenu(event: MouseEvent, view: EditorView, deps: MenuDeps): boolean {
   const hit = view.posAtCoords({ left: event.clientX, top: event.clientY });
   if (!hit) return false;
+  // En egen markering som klicket ligger i (för "Kommentera …"), innan menyn ändrar den.
+  const sel = view.state.selection;
+  const selRange =
+    !sel.empty && hit.pos >= sel.from && hit.pos <= sel.to && sel.$from.sameParent(sel.$to)
+      ? { from: sel.from, to: sel.to }
+      : null;
   const range = wordAt(view.state, hit.pos);
   if (!range) {
     // Inget ord under markören: visa bara "Infoga tecken".
@@ -50,7 +60,7 @@ export function openContextMenu(event: MouseEvent, view: EditorView, deps: MenuD
     closeMenu();
     const menu = h("div", { class: "context-menu", role: "menu" });
     current = menu;
-    menu.append(charsItem(deps, view, hit.pos), noteItem(deps, view, hit.pos));
+    menu.append(...commentItems(deps, view, hit.pos, selRange), charsItem(deps, view, hit.pos), noteItem(deps, view, hit.pos));
     document.body.append(menu);
     position(menu, event.clientX, event.clientY);
     return true;
@@ -78,7 +88,12 @@ export function openContextMenu(event: MouseEvent, view: EditorView, deps: MenuD
   const misspelled = deps.spell.isMisspelled(range.word);
   if (misspelled) buildSpelling(menu, range, deps, choose);
   buildSynonyms(menu, range, choose);
-  menu.append(h("hr", {}), charsItem(deps, view, hit.pos), noteItem(deps, view, hit.pos));
+  menu.append(
+    h("hr", {}),
+    ...commentItems(deps, view, hit.pos, selRange ?? { from: range.from, to: range.to }),
+    charsItem(deps, view, hit.pos),
+    noteItem(deps, view, hit.pos),
+  );
 
   document.body.append(menu);
   position(menu, event.clientX, event.clientY);
@@ -147,6 +162,35 @@ function charsItem(deps: MenuDeps, view: EditorView, pos: number): HTMLButtonEle
     view.dispatch(view.state.tr.setSelection(TextSelection.near(view.state.doc.resolve(p))));
     deps.openChars();
   });
+}
+
+/** "Kommentera …", eller "Ändra kommentar …"/"Ta bort kommentar" på en befintlig kommentar. */
+function commentItems(
+  deps: MenuDeps,
+  view: EditorView,
+  pos: number,
+  target: { from: number; to: number } | null,
+): HTMLElement[] {
+  const existing = commentAt(view.state, pos);
+  if (existing) {
+    return [
+      item(`Ändra kommentar … (”${existing.text.length > 30 ? existing.text.slice(0, 30) + "…" : existing.text}”)`, () => {
+        closeMenu();
+        deps.comment(existing.from, existing.to);
+      }),
+      item("Ta bort kommentar", () => {
+        closeMenu();
+        deps.removeComment(existing.from, existing.to);
+      }),
+    ];
+  }
+  if (!target || target.from === target.to) return [];
+  return [
+    item("Kommentera …", () => {
+      closeMenu();
+      deps.comment(target.from, target.to);
+    }),
+  ];
 }
 
 /** Gör stycket till en egen anteckning (eller tillbaka). */

@@ -45,6 +45,7 @@ import {
 } from "./frontmatter";
 import { splitFrontmatter } from "./editor";
 import { copyRich, publishContent } from "./publish";
+import { listComments } from "./comments";
 import { dropLocal, keepLocal, localCopy, type Unsaved } from "./unsaved";
 
 const AUTOSAVE_MS = 1500;
@@ -137,7 +138,9 @@ class App {
       onActivity: () => {
         document.body.classList.add("typing");
         closeMenu();
+        this.closeCommentBubble();
       },
+      onCommentClick: (c, rect) => this.showCommentBubble(c, rect),
       onSelection: () => {
         this.scheduleAnalysis();
         if (this.aiDrawer.classList.contains("open")) this.ai.updateScope();
@@ -148,6 +151,8 @@ class App {
           replace: (from, to, text) => this.editor.replaceRange(from, to, text),
           openChars: () => this.toggleChars(true),
           toggleNote: () => this.toggleNote(),
+          comment: (from, to) => void this.editComment(from, to),
+          removeComment: (from, to) => this.editor.removeComment(from, to),
         }),
     });
     this.editor.typewriter = this.settings.typewriter;
@@ -836,6 +841,7 @@ class App {
       [`${modKey}+Shift+C`, "Kopiera texten för publicering (HTML och ren text)"],
       [`${modKey}+F / ${modKey}+Alt+F`, "Sök / sök och ersätt"],
       [`${modKey}+Alt+M`, "Gör stycket till en egen anteckning (följer inte med vid export)"],
+      [`${modKey}+Alt+K`, "Kommentera markerad text (följer inte med vid export)"],
       [`Enter / Shift+Enter, ${modKey}+G`, "Nästa / föregående träff"],
       [`${modKey}+J`, "AI-assistent"],
       [`${modKey}+.`, "Infoga tecken (citattecken, tankstreck m.m.)"],
@@ -1291,6 +1297,30 @@ class App {
       h("span", {}, " ord i texten"),
     );
 
+    // Kommentarer (alltid hela texten)
+    const comments = listComments(this.editor.getMarkdown());
+    const commentList = h("ol", { class: "quotes comments" });
+    for (const c of comments) {
+      commentList.append(
+        h(
+          "li",
+          {},
+          h(
+            "button",
+            {
+              title: "Visa i texten",
+              onclick: () => {
+                if (this.editor.mode !== "write") this.setView("write", false);
+                if (!this.editor.selectText(c.quote)) toast("Hittade inte stället i texten");
+              },
+            },
+            h("span", { class: "c" }, `”${c.quote.length > 60 ? c.quote.slice(0, 60) + " …" : c.quote}”`),
+            h("span", { class: "t" }, c.text),
+          ),
+        ),
+      );
+    }
+
     // Citat
     const quotes = findQuotes(text);
     const quoteList = h("ol", { class: "quotes" });
@@ -1411,6 +1441,14 @@ class App {
       h(
         "section",
         {},
+        h("h3", {}, `Kommentarer${comments.length ? ` (${comments.length})` : ""}`),
+        comments.length
+          ? commentList
+          : h("p", { class: "meta" }, `Inga kommentarer. Markera ord och tryck ${modKey}+Alt+K, eller högerklicka och välj Kommentera …`),
+      ),
+      h(
+        "section",
+        {},
         h(
           "div",
           { class: "section-head" },
@@ -1423,6 +1461,71 @@ class App {
       ),
     );
     this.analysisDrawer.scrollTop = scrollTop;
+  }
+
+  // ---------------- kommentarer ----------------
+  private commentBubble: HTMLElement | null = null;
+
+  /** Lägg till eller ändra en kommentar – på intervallet, eller på markeringen/kommentaren vid markören. */
+  private async editComment(from?: number, to?: number): Promise<void> {
+    this.closeCommentBubble();
+    let target: { from: number; to: number; text: string; quote: string } | null;
+    if (from !== undefined && to !== undefined) {
+      const existing = this.editor.commentAtPos(from);
+      target =
+        existing && existing.from === from && existing.to === to
+          ? existing
+          : { from, to, text: "", quote: this.editor.getSelectionText() };
+    } else {
+      target = this.editor.commentTarget();
+    }
+    if (!target) {
+      toast("Markera ett eller flera ord (i samma stycke) som du vill kommentera");
+      return;
+    }
+    const quote = target.quote.length > 60 ? `${target.quote.slice(0, 60)} …` : target.quote;
+    const text = await prompt(quote ? `Kommentar till ”${quote}”` : "Kommentar", target.text, target.text ? "Spara" : "Lägg till");
+    if (text === null) return;
+    if (!text.trim()) {
+      if (target.text) this.editor.removeComment(target.from, target.to);
+      return;
+    }
+    this.editor.setComment(target.from, target.to, text);
+  }
+
+  private showCommentBubble(c: { from: number; to: number; text: string }, rect: DOMRect): void {
+    this.closeCommentBubble();
+    const bubble = h(
+      "div",
+      { class: "comment-bubble", role: "dialog", "aria-label": "Kommentar" },
+      h("p", {}, c.text || "(tom kommentar)"),
+      h(
+        "div",
+        { class: "actions" },
+        h("button", { class: "link", onclick: () => void this.editComment(c.from, c.to) }, "Ändra"),
+        h(
+          "button",
+          {
+            class: "link",
+            onclick: () => {
+              this.editor.removeComment(c.from, c.to);
+              this.closeCommentBubble();
+            },
+          },
+          "Ta bort",
+        ),
+      ),
+    );
+    document.body.append(bubble);
+    const left = Math.min(Math.max(8, rect.left + window.scrollX), window.scrollX + window.innerWidth - bubble.offsetWidth - 8);
+    bubble.style.left = `${left}px`;
+    bubble.style.top = `${rect.bottom + window.scrollY + 6}px`;
+    this.commentBubble = bubble;
+  }
+
+  private closeCommentBubble(): void {
+    this.commentBubble?.remove();
+    this.commentBubble = null;
   }
 
   /** Egen anteckning: gör om stycket i Skriv-vyn, infoga en kommentar i Markdown-vyn. */
@@ -2225,6 +2328,9 @@ class App {
           e.preventDefault();
           this.searchBar.step(e.shiftKey ? -1 : 1);
         }
+      } else if (isMod(e) && e.altKey && e.code === "KeyK") {
+        e.preventDefault();
+        void this.editComment();
       } else if (isMod(e) && e.altKey && e.code === "KeyM") {
         e.preventDefault();
         this.toggleNote();
@@ -2253,6 +2359,16 @@ class App {
       }
       lastX = e.clientX;
       lastY = e.clientY;
+    });
+
+    document.addEventListener("mousedown", (e) => {
+      if (this.commentBubble && !this.commentBubble.contains(e.target as Node)) {
+        const onComment = (e.target as Element).closest?.(".ww-comment");
+        if (!onComment) this.closeCommentBubble();
+      }
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && this.commentBubble) this.closeCommentBubble();
     });
 
     document.addEventListener("click", (e) => {

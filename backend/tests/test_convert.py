@@ -202,3 +202,18 @@ def test_page_break_first_heading_not_broken(client):
     md = client.get("/api/documents/Bok2/export?format=md&chapters=1").content.decode()
     assert "page" not in md
     assert client.get("/api/documents/Bok2/export?format=docx&chapters=3").status_code == 400
+
+
+def test_comments_never_exported(client):
+    doc = (
+        "# Text\n\nHon sa att {==hon aldrig varit där==}{>>Sa hon verkligen så?<<} och gick.\n\n"
+        "En **{==fet==}{>>kolla<<}** del. Fristående {>>bara kommentar<<} här.\n\n```\n{==kod==}{>>behålls<<}\n```\n"
+    )
+    client.post("/api/documents", json={"name": "Kommentar", "content": doc})
+    md = client.get("/api/documents/Kommentar/export?format=md").content.decode()
+    assert "Sa hon verkligen" not in md and "{==" not in md.split("```")[0]
+    assert "Hon sa att hon aldrig varit där och gick." in md
+    assert "En **fet** del. Fristående här." in md
+    assert "{==kod==}{>>behålls<<}" in md  # kodblock orört
+    xml = _docx_xml(client.get("/api/documents/Kommentar/export?format=docx").content)
+    assert "Sa hon verkligen" not in xml and "kolla" not in xml and "aldrig varit där" in xml

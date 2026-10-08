@@ -18,6 +18,7 @@ import { Decoration, DecorationSet, type EditorView } from "@tiptap/pm/view";
 import { TextSelection } from "@tiptap/pm/state";
 import { setHighlight, spellExtension, WordHighlight, type SpellService } from "./spell";
 import { Note, stripNotes } from "./notes";
+import { cleanComment, Comment, commentAt, stripComments, type CommentRange } from "./comments";
 import { LongSentences, setLongSentences } from "./longsentences";
 import { typographyExtension, type TypographyOptions } from "./typography";
 import {
@@ -96,6 +97,8 @@ export interface EditorOptions {
   onActivity: () => void;
   onSelection?: () => void;
   onContextMenu?: (event: MouseEvent, view: EditorView) => boolean;
+  /** Klick på kommenterad text (för att visa kommentaren). */
+  onCommentClick?: (comment: CommentRange, rect: DOMRect) => void;
 }
 
 export class DocEditor {
@@ -176,7 +179,7 @@ export class DocEditor {
       });
       return blocks.join("\n\n");
     }
-    return stripMarkdown(stripNotes(splitFrontmatter(this.markdown).body));
+    return stripMarkdown(stripComments(stripNotes(splitFrontmatter(this.markdown).body)));
   }
 
   /** Frontmatter (tom sträng om den saknas). */
@@ -199,6 +202,56 @@ export class DocEditor {
       this.autoGrow();
     }
     this.emitChange();
+  }
+
+  // ---------------- kommentarer ----------------
+  /**
+   * Det som ska kommenteras: kommentaren vid markören, annars markeringen (inom
+   * ett stycke). I Markdown-vyn: markeringen i källtexten.
+   */
+  commentTarget(): { from: number; to: number; text: string; quote: string } | null {
+    if (this.mode === "write" && this.editor) {
+      const { state } = this.editor;
+      const { from, to, empty, $from, $to } = state.selection;
+      const existing = commentAt(state, from);
+      if (existing && (empty || (from >= existing.from && to <= existing.to))) return existing;
+      if (empty || !$from.sameParent($to)) return null;
+      return { from, to, text: "", quote: state.doc.textBetween(from, to, " ") };
+    }
+    const ta = this.sourceEl;
+    const from = ta.selectionStart ?? 0;
+    const to = ta.selectionEnd ?? 0;
+    const quote = ta.value.slice(from, to);
+    if (from === to || quote.includes("\n\n")) return null;
+    return { from, to, text: "", quote };
+  }
+
+  /** Lägger till eller ändrar en kommentar på intervallet (från commentTarget). */
+  setComment(from: number, to: number, text: string): void {
+    const clean = cleanComment(text);
+    if (!clean) return;
+    if (this.mode === "write" && this.editor) {
+      const { state, view } = this.editor;
+      const type = state.schema.marks.comment;
+      view.dispatch(state.tr.removeMark(from, to, type).addMark(from, to, type.create({ text: clean })));
+      view.focus();
+      return;
+    }
+    const ta = this.sourceEl;
+    const quote = ta.value.slice(from, to);
+    this.replaceSource(from, to, `{==${quote}==}{>>${clean}<<}`);
+  }
+
+  /** Befintlig kommentar vid en position i Skriv-vyn. */
+  commentAtPos(pos: number): CommentRange | null {
+    return this.editor ? commentAt(this.editor.state, pos) : null;
+  }
+
+  removeComment(from: number, to: number): void {
+    if (!this.editor) return;
+    const { state, view } = this.editor;
+    view.dispatch(state.tr.removeMark(from, to, state.schema.marks.comment));
+    view.focus();
   }
 
   /** Gör aktuellt stycke till en egen anteckning (eller tillbaka). */
@@ -442,6 +495,7 @@ export class DocEditor {
         WordHighlight,
         SearchHighlight,
         Note,
+        Comment,
         LongSentences,
       ],
       content: splitFrontmatter(this.markdown).body,
@@ -455,6 +509,14 @@ export class DocEditor {
           spellcheck: "false",
           lang: "sv",
         }),
+        handleClick: (view, pos, event) => {
+          if (!this.opts.onCommentClick || event.button !== 0) return false;
+          const c = commentAt(view.state, pos);
+          if (!c) return false;
+          const target = (event.target as Element).closest?.(".ww-comment");
+          if (target) this.opts.onCommentClick(c, target.getBoundingClientRect());
+          return false; // markören placeras som vanligt
+        },
         handleDOMEvents: {
           contextmenu: (view, event) => {
             if (event.shiftKey || !this.opts.onContextMenu) return false;

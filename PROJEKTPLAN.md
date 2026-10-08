@@ -306,4 +306,9 @@ Baserad på `PLAN.md`. Målet är en distraktionsfri ordbehandlare för kulturjo
   - Texttyp och egna instruktioner läggs i systeminstruktionen efter grundreglerna och före texten, med en uttrycklig skrivning om att grundreglerna gäller först. Egna instruktioner får vara högst 2 000 tecken. `ai` och `genre` skickas inte dubbelt i metadatablocket.
   - AI-panelen visar texttyp och instruktioner med en länk till Metadata.
   - Inställningar har *Texttyp för nya dokument*.
+- **Version 1.9.0 (2026-10-08) – kommentarer:**
+  - Nytt märke `comment` (`comments.ts`) som sparas som CriticMarkup `{==text==}{>>kommentar<<}` i Markdown-filen. Filen läses och skrivs tillbaka exakt.
+  - Lägg till med ⌘⌥K / Ctrl+Alt+K eller högerklicksmenyn (Kommentera / Ändra / Ta bort). Ett klick på kommenterad text visar en bubbla med Ändra och Ta bort. Analys-panelen listar alla kommentarer.
+  - `stripComments` (frontend) och `strip_comments` (backend, `convert.py`) tar bort kommentarerna vid export, kopiering för publicering och räkning. Kodblock lämnas orörda. Test: `test_comments_never_exported`.
+  - Systeminstruktionen till AI:n förklarar formatet: kommentarer är bakgrund och ska inte granskas som text.
 - **Kvar efter v1 (förslag):** utvärdering av gemma4 för bättre svenska, CI-arbetsflöde (`.github/` kunde inte skrivas härifrån).

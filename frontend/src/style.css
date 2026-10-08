@@ -1786,3 +1786,38 @@ label.field.wide {
 .ai-textinfo .link {
   padding: 0 2px;
 }
+
+/* ---------- Kommentarer ---------- */
+.prose .ww-comment {
+  background: color-mix(in srgb, #f2c94c 26%, transparent);
+  border-bottom: 2px solid #d9a92a;
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.comment-bubble {
+  position: absolute;
+  z-index: 30;
+  max-width: 320px;
+  padding: 10px 12px 6px;
+  background: var(--panel);
+  border: 1px solid color-mix(in srgb, #d9a92a 60%, transparent);
+  border-left: 3px solid #d9a92a;
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  font-family: var(--ui-font);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.comment-bubble p {
+  margin: 0 0 4px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.comment-bubble .actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}

@@ -138,6 +138,22 @@ def strip_notes(md: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", "\n".join(out))
 
 
+_CODE_BLOCK = re.compile(r"(^(?:```|~~~)[\s\S]*?^(?:```|~~~)[ \t]*$)", re.M)
+
+
+def strip_comments(md: str) -> str:
+    """Tar bort kommentarer (CriticMarkup), utom i kodblock.
+
+    {==text==}{>>kommentar<<} blir text, och fristående {>>kommentar<<} försvinner.
+    """
+    parts = _CODE_BLOCK.split(md)
+    for i in range(0, len(parts), 2):
+        p = re.sub(r"\{==([\s\S]+?)==\}\{>>[\s\S]*?<<\}", r"\1", parts[i])
+        p = re.sub(r"[ \t]?\{>>[\s\S]*?<<\}", "", p)
+        parts[i] = re.sub(r"\{==([\s\S]+?)==\}", r"\1", p)
+    return "".join(parts)
+
+
 def _title(frontmatter: str) -> str:
     m = re.search(r"^title:[ \t]+(.+?)[ \t]*$", frontmatter, re.M)
     if not m:
@@ -170,7 +186,7 @@ def export_document(
     if fmt is None:
         raise ConvertError(f"Okänt exportformat: {fmt_key}")
     frontmatter, body = split_frontmatter(markdown)
-    body = strip_notes(body)  # egna anteckningar följer aldrig med
+    body = strip_comments(strip_notes(body))  # egna anteckningar och kommentarer följer aldrig med
     if fmt.pandoc is None:
         return (frontmatter + body).encode("utf-8"), fmt
     if fmt.key in {"docx", "odt", "rtf", "html"}:
